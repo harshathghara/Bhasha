@@ -48,7 +48,7 @@ async def test_run_round_publishes_kickoff_and_runs_agents():
     show = make_show()
     bus = EventBus(show)
 
-    narrative = await asyncio.wait_for(
+    recap, narrative = await asyncio.wait_for(
         run_round(show, bus, TalkativeClient(), fast_config()), timeout=10
     )
 
@@ -56,8 +56,31 @@ async def test_run_round_publishes_kickoff_and_runs_agents():
     assert show.events[0].kind == EventKind.GM_ANNOUNCEMENT
     spoken = [e.text for e in show.events if e.sender_id in ("vikram", "meera")]
     assert spoken == ["I am here.", "I am here."]
+    assert recap == "Everyone spoke up."
     assert narrative == "Everyone spoke up."
+    assert show.recaps[1] == "Everyone spoke up."
     assert show.narratives[1] == "Everyone spoke up."
+
+
+@pytest.mark.asyncio
+async def test_run_round_publishes_opening_brief_after_kickoff():
+    show = make_show()
+    bus = EventBus(show)
+    brief = "A bloody handkerchief under the sofa."
+
+    await asyncio.wait_for(
+        run_round(
+            show, bus, SilentClient(), fast_config(),
+            opening_brief=brief,
+        ),
+        timeout=10,
+    )
+
+    assert show.events[0].kind == EventKind.GM_ANNOUNCEMENT
+    assert show.events[1].kind == EventKind.PRODUCER_NOTE
+    assert show.events[1].sender_id == "producer"
+    assert show.events[1].text == brief
+    assert show.events[1].round == 1
 
 
 @pytest.mark.asyncio
@@ -65,11 +88,12 @@ async def test_run_round_ends_on_quiescence_when_agents_stay_silent():
     show = make_show()
     bus = EventBus(show)
 
-    narrative = await asyncio.wait_for(
+    recap, narrative = await asyncio.wait_for(
         run_round(show, bus, SilentClient(), fast_config(action_budget=5)),
         timeout=10,
     )
 
+    assert recap == "A quiet round in the house."
     assert narrative == "A quiet round in the house."
 
 

@@ -44,6 +44,8 @@ def _format_event(event, agent) -> str:
         return f"[GAME MASTER RULING] {event.text}"
     if event.kind == EventKind.GM_ANNOUNCEMENT:
         return f"[GAME MASTER] {event.text}"
+    if event.kind == EventKind.PRODUCER_NOTE:
+        return f"[HOUSE ANNOUNCEMENT / NEW CLUE] {event.text}"
     if event.kind == EventKind.CONFESSION:
         return f"[your own private thought] {event.text}"
     if event.sender_id == agent.id:

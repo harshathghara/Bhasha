@@ -47,27 +47,91 @@ def test_create_show_returns_running_show_with_five_contestants(tmp_path):
     assert data["status"] == "running"
 
 
+def test_show_id_strips_punctuation_that_breaks_urls(tmp_path):
+    client, _ = make_client(tmp_path)
+    data = create_show(
+        client, title="Sheesha Ghar — Who Takes the Blame?"
+    ).json()
+    assert data["id"] == "sheesha-ghar-who-takes-the-blame"
+    assert "?" not in data["id"]
+
+
 def test_secret_connections_are_applied_symmetrically(tmp_path):
     client, _ = make_client(tmp_path)
     data = create_show(client, secret_connections=[
         {"agent_a": "creditor", "agent_b": "lawyer",
-         "connection_note": "Former business partners."},
+         "connection_note": "Shared a quiet deal about Ramesh's debt papers."},
     ]).json()
 
     contestants = {c["id"]: c for c in data["contestants"]}
     assert contestants["creditor"]["connected_to"] == "lawyer"
     assert contestants["lawyer"]["connected_to"] == "creditor"
-    assert contestants["lawyer"]["connection_note"] == "Former business partners."
+    assert contestants["lawyer"]["connection_note"] == (
+        "Shared a quiet deal about Ramesh's debt papers."
+    )
 
 
-def test_run_round_returns_narrative(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_run_round_returns_recap_and_narrative(tmp_path):
+    client, store = make_client(tmp_path)
     show_id = create_show(client).json()["id"]
 
     response = client.post(f"/shows/{show_id}/rounds")
 
     assert response.status_code == 200
-    assert response.json() == {"round": 1, "narrative": "A lively round."}
+    assert response.json() == {
+        "round": 1,
+        "recap": "A lively round.",
+        "narrative": "A lively round.",
+    }
+    show = store.get(show_id)
+    assert show.recaps[1] == "A lively round."
+    assert show.narratives[1] == "A lively round."
+
+
+def test_start_round_with_opening_brief_publishes_after_kickoff(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    brief = "Police found a second set of footprints by the back door."
+
+    response = client.post(
+        f"/shows/{show_id}/rounds",
+        json={"opening_brief": brief},
+    )
+
+    assert response.status_code == 200
+    events = store.get(show_id).events
+    assert events[0].kind.value == "gm_announcement"
+    assert events[0].round == 1
+    assert events[1].kind.value == "producer_note"
+    assert events[1].sender_id == "producer"
+    assert events[1].text == brief
+    assert events[1].round == 1
+
+
+def test_two_rounds_accumulate_narratives_and_brief_on_round_two(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client, max_rounds=3).json()["id"]
+
+    assert client.post(f"/shows/{show_id}/rounds").status_code == 200
+    brief = "Someone wiped blood from the stair railing overnight."
+    assert client.post(
+        f"/shows/{show_id}/rounds",
+        json={"opening_brief": brief},
+    ).status_code == 200
+
+    show = store.get(show_id)
+    assert show.current_round == 2
+    assert set(show.narratives) == {1, 2}
+    assert set(show.recaps) == {1, 2}
+    assert show.narratives[1] == "A lively round."
+    assert show.narratives[2] == "A lively round."
+    assert show.recaps[2] == "A lively round."
+
+    round_two = show.events_for_round(2)
+    assert round_two[0].kind.value == "gm_announcement"
+    assert "Round 2 begins" in round_two[0].text
+    assert round_two[1].kind.value == "producer_note"
+    assert round_two[1].text == brief
 
 
 def test_round_limit_is_enforced(tmp_path):
@@ -116,3 +180,29 @@ def test_websocket_streams_events_during_a_round(tmp_path):
 
     assert first["kind"] == "gm_announcement"
     assert first["seq"] == 0
+
+
+def test_inject_event_publishes_public_producer_note(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+
+    response = client.post(
+        f"/shows/{show_id}/events",
+        json={"text": "A bloody handkerchief was found under the sofa."},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["kind"] == "producer_note"
+    assert data["sender_id"] == "producer"
+    assert data["visibility"] == "public"
+    assert "handkerchief" in data["text"]
+    assert store.get(show_id).events[-1].text == data["text"]
+
+
+def test_inject_event_rejects_empty_text(tmp_path):
+    client, _ = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    assert client.post(
+        f"/shows/{show_id}/events", json={"text": "   "}
+    ).status_code == 400

@@ -33,8 +33,12 @@ export function getShow(showId) {
   return request(`/shows/${showId}`);
 }
 
-export function startRound(showId) {
-  return post(`/shows/${showId}/rounds`);
+export function startRound(showId, options = {}) {
+  const opening = (options.opening_brief || "").trim();
+  if (!opening) {
+    return post(`/shows/${showId}/rounds`);
+  }
+  return post(`/shows/${showId}/rounds`, { opening_brief: opening });
 }
 
 export function stopRound(showId) {
@@ -47,6 +51,10 @@ export function killAgent(showId, agentId) {
 
 export function releaseEvent(showId, seq) {
   return post(`/shows/${showId}/events/${seq}/release`);
+}
+
+export function injectEvent(showId, text) {
+  return post(`/shows/${showId}/events`, { text });
 }
 
 export function openEventSocket(showId, onEvent) {

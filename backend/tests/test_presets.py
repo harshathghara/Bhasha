@@ -6,6 +6,8 @@ from app.presets import (
     PRESET_AGENT_PERSONALITIES, build_preset_agent,
 )
 
+MURDER_IDS = {"creditor", "wife", "lawyer", "brother", "househelp"}
+
 
 def test_defaults_are_nonempty_strings():
     assert DEFAULT_SHOW_PROMPT and isinstance(DEFAULT_SHOW_PROMPT, str)
@@ -13,14 +15,27 @@ def test_defaults_are_nonempty_strings():
     assert DEFAULT_RULES_TEXT and isinstance(DEFAULT_RULES_TEXT, str)
 
 
+def test_defaults_describe_the_murder_blame_premise():
+    assert "Ramesh Malhotra" in DEFAULT_SHOW_PROMPT
+    assert "killer" in DEFAULT_SHOW_PROMPT.lower()
+    assert "blame" in DEFAULT_GM_PROMPT.lower()
+    assert "missing" in DEFAULT_SHOW_PROMPT.lower()
+    assert "one of the five" in DEFAULT_RULES_TEXT.lower()
+    assert "outsiders" in DEFAULT_GM_PROMPT.lower()
+
+
 def test_preset_pool_has_five_unique_murder_cast_personalities():
     assert len(PRESET_AGENT_PERSONALITIES) == 5
-    assert len({p["id"] for p in PRESET_AGENT_PERSONALITIES}) == 5
-    assert {p["id"] for p in PRESET_AGENT_PERSONALITIES} == {
-        "creditor", "wife", "lawyer", "brother", "househelp",
-    }
+    ids = {p["id"] for p in PRESET_AGENT_PERSONALITIES}
+    assert ids == MURDER_IDS
     for preset in PRESET_AGENT_PERSONALITIES:
+        prompt = preset["personality_prompt"].lower()
         assert preset["name"] and preset["personality_prompt"]
+        assert "do not know who the killer is" in prompt \
+            or "don't know who the killer is" in prompt
+        assert "2 to 4 short sentences" in prompt
+        assert "mysterious outsiders" in prompt
+        assert "betrayal loop" in prompt
 
 
 def test_build_preset_agent_returns_active_agent():
@@ -32,4 +47,4 @@ def test_build_preset_agent_returns_active_agent():
 
 def test_build_preset_agent_missing_raises():
     with pytest.raises(KeyError):
-        build_preset_agent("nonexistent")
+        build_preset_agent("strategist")

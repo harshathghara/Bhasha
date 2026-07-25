@@ -54,6 +54,7 @@ export default function WorldPage({ show }) {
       }));
       setEndedRound({
         round: result.round,
+        recap: result.recap || result.narrative,
         narrative: result.narrative,
       });
       if (show.max_rounds != null && result.round >= show.max_rounds) {
@@ -68,7 +69,11 @@ export default function WorldPage({ show }) {
           const rounds = Object.keys(narratives).map(Number);
           if (rounds.length === 0) return null;
           const last = Math.max(...rounds);
-          return { round: last, narrative: narratives[last] };
+          return {
+            round: last,
+            recap: narratives[last],
+            narrative: narratives[last],
+          };
         });
       } else {
         setStartError(error.message || "Failed to start round");
@@ -131,7 +136,7 @@ export default function WorldPage({ show }) {
       {modalOpen && (
         <RoundEndModal
           round={endedRound.round}
-          recap={endedRound.narrative}
+          recap={endedRound.recap}
           narratives={narratives}
           storyOpen={storyOpen}
           showOver={showOver}

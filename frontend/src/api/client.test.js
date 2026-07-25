@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   createShow, getShow, startRound, stopRound, killAgent, releaseEvent,
+  injectEvent,
 } from "./client";
 
 beforeEach(() => {
@@ -38,6 +39,16 @@ describe("api client", () => {
       expect.objectContaining({ method: "POST" })
     );
 
+    global.fetch.mockReturnValue(ok({ round: 2, narrative: "y" }));
+    await startRound("sheesha-ghar", { opening_brief: "Footprints by the door." });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/rounds"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ opening_brief: "Footprints by the door." }),
+      })
+    );
+
     global.fetch.mockReturnValue(ok({ stopped: true }));
     await stopRound("sheesha-ghar");
     expect(global.fetch).toHaveBeenCalledWith(
@@ -63,6 +74,16 @@ describe("api client", () => {
       expect.objectContaining({ method: "POST" })
     );
     expect(result.released).toBe(true);
+  });
+
+  it("injectEvent posts a producer note to the events route", async () => {
+    global.fetch.mockReturnValue(ok({ seq: 4, kind: "producer_note" }));
+    const result = await injectEvent("sheesha-ghar", "A bloody handkerchief.");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/events"),
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(result.kind).toBe("producer_note");
   });
 
   it("throws when a response is not ok", async () => {

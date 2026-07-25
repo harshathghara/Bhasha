@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 GM_ID = "game_master"
+PRODUCER_ID = "producer"
 
 
 class AgentStatus(str, Enum):
@@ -22,6 +23,7 @@ class EventKind(str, Enum):
     CONFESSION = "confession"
     GM_RULING = "gm_ruling"
     GM_ANNOUNCEMENT = "gm_announcement"
+    PRODUCER_NOTE = "producer_note"
     NARRATION = "narration"
 
 
@@ -92,7 +94,8 @@ class Show:
     current_round: int = 0
     max_rounds: int = None
     events: list = field(default_factory=list)
-    narratives: dict = field(default_factory=dict)
+    narratives: dict = field(default_factory=dict)  # story chapters by round
+    recaps: dict = field(default_factory=dict)  # producer recaps by round
 
     def get_agent(self, agent_id: str) -> Agent:
         for agent in self.contestants:
@@ -122,6 +125,7 @@ class Show:
             "max_rounds": self.max_rounds,
             "events": [e.to_dict() for e in self.events],
             "narratives": dict(self.narratives),
+            "recaps": dict(self.recaps),
         }
 
 
