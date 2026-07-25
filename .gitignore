@@ -1,5 +1,8 @@
 .env
 .worktrees/
 backend/venv/
-backend/__pycache__/
 backend/.venv/
+__pycache__/
+*.pyc
+frontend/node_modules/
+backend/snapshots/
