@@ -54,6 +54,7 @@ Show
   id, title, show_prompt, gm_prompt, rules_text
   status: setup | running | paused | ended
   current_round: int
+  max_rounds: int | None      # optional producer-set cap; None = unlimited, ends manually
   stages: [Stage]            # optional, see §8
   contestants: [Agent]
 
