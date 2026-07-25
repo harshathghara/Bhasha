@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 GM_ID = "game_master"
 
@@ -23,6 +24,7 @@ class EventKind(str, Enum):
     GM_RULING = "gm_ruling"
     GM_ANNOUNCEMENT = "gm_announcement"
     NARRATION = "narration"
+    LEAK = "leak"
 
 
 class Visibility(str, Enum):
@@ -41,6 +43,7 @@ class Event:
     recipients: list = field(default_factory=list)
     released: bool = False
     timestamp: float = 0.0
+    leaked_from_seq: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +56,7 @@ class Event:
             "recipients": list(self.recipients),
             "released": self.released,
             "timestamp": self.timestamp,
+            "leaked_from_seq": self.leaked_from_seq,
         }
 
 

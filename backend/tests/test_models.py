@@ -59,3 +59,17 @@ def test_round_config_defaults():
     assert config.gm_review_every == 3
     assert config.context_window_events == 60
     assert GM_ID == "game_master"
+
+
+def test_event_leak_fields_default_and_serialize():
+    default_event = Event(seq=1, round=1, sender_id="a", text="hi")
+    assert default_event.leaked_from_seq is None
+    assert default_event.to_dict()["leaked_from_seq"] is None
+
+    leak_event = Event(
+        seq=0, round=1, sender_id="game_master", text="It has been leaked...",
+        kind=EventKind.LEAK, leaked_from_seq=3,
+    )
+    assert leak_event.leaked_from_seq == 3
+    assert leak_event.to_dict()["leaked_from_seq"] == 3
+    assert leak_event.to_dict()["kind"] == "leak"
