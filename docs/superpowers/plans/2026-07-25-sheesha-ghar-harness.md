@@ -74,7 +74,7 @@ frontend/
 
 **Interfaces:**
 - Produces: `AgentStatus` (`ACTIVE`, `WARNED`, `PAUSED`, `ELIMINATED`), `ShowStatus` (`SETUP`, `RUNNING`, `PAUSED`, `ENDED`), `MessageKind` (`ACTION`, `GM_RULING`, `NARRATION`), `Visibility` (`PUBLIC`, `PRIVATE`) — all `str, Enum`.
-- Produces: `Agent(id, name, personality_prompt, status=ACTIVE, private_memory=[], warnings=0)` with `.to_dict()`.
+- Produces: `Agent(id, name, personality_prompt, status=ACTIVE, private_memory=[], warnings=0, connected_to=None, connection_note="")` with `.to_dict()`. `connected_to`/`connection_note` implement a "Mirror Pair" — a secret prior relationship with another agent (former sibling, rival, etc.) that the producer sets at show creation and that only feeds into *this* agent's own context, never the connected agent's public knowledge.
 - Produces: `Message(id, round, sender_id, text, kind=ACTION, visibility=PUBLIC, recipients=[], released=False)` with `.to_dict()`.
 - Produces: `RoundLog(round_number, messages=[], narrative="")` with `.to_dict()`.
 - Produces: `Show(id, title, show_prompt, gm_prompt, rules_text, contestants=[], status=SETUP, current_round=0, round_logs=[], max_rounds=None)` with `.get_agent(agent_id) -> Agent` (raises `KeyError` if missing) and `.to_dict()`. `max_rounds=None` means unlimited (producer ends the show manually); a producer who sets it caps how many times `/advance` will run.
@@ -107,7 +107,16 @@ def test_agent_defaults():
     assert agent.status == AgentStatus.ACTIVE
     assert agent.private_memory == []
     assert agent.warnings == 0
+    assert agent.connected_to is None
+    assert agent.connection_note == ""
     assert agent.to_dict()["status"] == "active"
+
+
+def test_agent_mirror_pair_fields_are_settable():
+    agent = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.",
+                   connected_to="mira", connection_note="Mira is Vex's estranged sister.")
+    assert agent.connected_to == "mira"
+    assert agent.to_dict()["connection_note"] == "Mira is Vex's estranged sister."
 
 
 def test_message_defaults():
@@ -194,6 +203,8 @@ class Agent:
     status: AgentStatus = AgentStatus.ACTIVE
     private_memory: list = field(default_factory=list)
     warnings: int = 0
+    connected_to: str = None
+    connection_note: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -203,6 +214,8 @@ class Agent:
             "status": self.status.value,
             "private_memory": list(self.private_memory),
             "warnings": self.warnings,
+            "connected_to": self.connected_to,
+            "connection_note": self.connection_note,
         }
 
 
@@ -527,8 +540,8 @@ git commit -m "feat: add OpenAI LLM client wrapper"
 
 **Interfaces:**
 - Consumes: `Show`, `Agent`, `Visibility` from `app.models` (Task 1); any object with `.complete(system_prompt, user_prompt) -> str` (Task 3).
-- Produces: `build_agent_prompt(show: Show, agent: Agent) -> tuple[str, str]`.
-- Produces: `run_agent_turn(show: Show, agent: Agent, llm_client) -> dict` returning `{"agent_id": str, "public_action": str, "private_messages": [{"to": str, "text": str}], "leak_message_ids": [str]}`. This is the exact shape Task 8 (orchestrator) consumes.
+- Produces: `build_agent_prompt(show: Show, agent: Agent) -> tuple[str, str]`. If `agent.connected_to` is set, the system prompt includes the secret connection note — this is a "Mirror Pair": the agent privately knows about the relationship, nobody else's context is affected.
+- Produces: `run_agent_turn(show: Show, agent: Agent, llm_client) -> dict` returning `{"agent_id": str, "public_action": str, "private_messages": [{"to": str, "text": str}], "leak_message_ids": [str], "confession": str}`. `confession` is the agent's private, no-recipient "diary room" thought for this round — this is the exact shape Task 8 (orchestrator) consumes.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -584,12 +597,23 @@ def test_build_agent_prompt_excludes_private_not_involving_agent():
     assert "Vex, let's ally." not in user_prompt  # private, karan not involved
 
 
+def test_build_agent_prompt_includes_secret_connection_note():
+    show, vex, mira = make_show_with_history()
+    vex.connected_to = "mira"
+    vex.connection_note = "Mira is Vex's estranged sister."
+
+    system_prompt, _ = build_agent_prompt(show, vex)
+
+    assert "Mira is Vex's estranged sister." in system_prompt
+
+
 def test_run_agent_turn_parses_json_response():
     show, vex, mira = make_show_with_history()
     response = json.dumps({
         "public_action": "I'm staying quiet this round.",
         "private_messages": [{"to": "mira", "text": "I don't trust Karan."}],
         "leak_message_ids": [],
+        "confession": "I don't actually trust anyone left in this house.",
     })
     llm_client = FakeLLMClient(response)
 
@@ -599,6 +623,21 @@ def test_run_agent_turn_parses_json_response():
     assert result["public_action"] == "I'm staying quiet this round."
     assert result["private_messages"] == [{"to": "mira", "text": "I don't trust Karan."}]
     assert result["leak_message_ids"] == []
+    assert result["confession"] == "I don't actually trust anyone left in this house."
+
+
+def test_run_agent_turn_defaults_confession_to_empty_string():
+    show, vex, mira = make_show_with_history()
+    response = json.dumps({
+        "public_action": "Staying neutral.",
+        "private_messages": [],
+        "leak_message_ids": [],
+    })
+    llm_client = FakeLLMClient(response)
+
+    result = run_agent_turn(show, vex, llm_client)
+
+    assert result["confession"] == ""
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -615,14 +654,23 @@ from .models import Show, Agent, Visibility
 
 
 def build_agent_prompt(show: Show, agent: Agent) -> tuple:
+    connection_line = ""
+    if agent.connected_to:
+        connection_line = (
+            f"\nSecret you alone know: {agent.connection_note} "
+            "Nobody else in the house knows this connection exists."
+        )
+
     system_prompt = (
         f"{agent.personality_prompt}\n\n"
         f"Show premise: {show.show_prompt}\n"
-        f"House rules: {show.rules_text}\n\n"
+        f"House rules: {show.rules_text}\n"
+        f"{connection_line}\n\n"
         "Respond ONLY with JSON of the shape: "
         '{"public_action": "<string>", "private_messages": '
         '[{"to": "<agent_id>", "text": "<string>"}], '
-        '"leak_message_ids": ["<message_id>"]}'
+        '"leak_message_ids": ["<message_id>"], '
+        '"confession": "<string, your private diary-room thought this round>"}'
     )
 
     visible_lines = []
@@ -655,13 +703,14 @@ def run_agent_turn(show: Show, agent: Agent, llm_client) -> dict:
         "public_action": data["public_action"],
         "private_messages": data.get("private_messages", []),
         "leak_message_ids": data.get("leak_message_ids", []),
+        "confession": data.get("confession", ""),
     }
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_agent_runner.py -v`
-Expected: 3 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -891,6 +940,12 @@ def test_run_narrator_returns_stripped_text():
     llm_client = FakeLLMClient("  A tense round in the house.  \n")
     result = run_narrator(show, [], llm_client)
     assert result == "A tense round in the house."
+
+
+def test_build_narrator_prompt_includes_one_good_deed_rule():
+    show = make_show()
+    system_prompt, _ = build_narrator_prompt(show, [])
+    assert "act of kindness" in system_prompt.lower()
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -908,7 +963,11 @@ def build_narrator_prompt(show: Show, round_messages: list) -> tuple:
     system_prompt = (
         "You are the narrator of a reality show. Write a short third-person "
         "recap paragraph (3-5 sentences) of this round for the viewing "
-        "audience. Do not invent facts not present in the round content."
+        "audience. Do not invent facts not present in the round content. "
+        "No matter how chaotic or hostile the round was, find and highlight "
+        "at least one authentic act of kindness, courage, or loyalty from "
+        "the round's actual content — do not fabricate one if none occurred, "
+        "but look for it before assuming there isn't one."
     )
     lines = [
         f"{msg.sender_id}: {msg.text}"
@@ -927,7 +986,7 @@ def run_narrator(show: Show, round_messages: list, llm_client) -> str:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_narrator_runner.py -v`
-Expected: 2 passed.
+Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1042,7 +1101,7 @@ git commit -m "feat: add in-memory show store with JSON snapshotting"
 
 **Interfaces:**
 - Consumes: `run_agent_turn` (Task 4), `run_gm_review` (Task 5), `run_narrator` (Task 6), `Show`, `Message`, `MessageKind`, `Visibility`, `AgentStatus`, `RoundLog` (Task 1), `ShowStore` (Task 7, optional).
-- Produces: `async def advance_round(show: Show, llm_client, store=None) -> RoundLog`. This is what Task 9's `/shows/{id}/advance` route calls directly (`await advance_round(...)`).
+- Produces: `async def advance_round(show: Show, llm_client, store=None) -> RoundLog`. This is what Task 9's `/shows/{id}/advance` route calls directly (`await advance_round(...)`). Besides the public action and any private DMs, each agent's `result["confession"]` (Task 4) — if non-empty — becomes its own `Message` with `visibility=Visibility.PRIVATE` and `recipients=[]` (a Confession Booth entry: visible to the sender and to viewers, never to other agents, unless later released via Task 9's `/release` route).
 - Concurrency note: `run_agent_turn` is synchronous (it makes a blocking HTTP call via the LLM client); `advance_round` runs each active agent's turn in a thread-pool executor via `asyncio.gather` so all active agents' calls are in flight at once, and none can observe another's result before every call returns.
 
 - [ ] **Step 1: Write the failing test**
@@ -1107,6 +1166,33 @@ async def test_advance_round_skips_eliminated_agents():
 
     senders = {m.sender_id for m in round_log.messages if m.kind == MessageKind.ACTION}
     assert senders == {"vex"}
+
+
+@pytest.mark.asyncio
+async def test_advance_round_records_confession_as_recipientless_private_message():
+    show = make_show()
+
+    class ConfessingClient:
+        def complete(self, system_prompt, user_prompt):
+            if "rulings" in system_prompt:
+                return json.dumps({"rulings": []})
+            if "public_action" not in system_prompt:
+                return "recap"
+            return json.dumps({
+                "public_action": "Staying neutral.",
+                "private_messages": [],
+                "leak_message_ids": [],
+                "confession": "I don't trust Mira at all.",
+            })
+
+    round_log = await advance_round(show, ConfessingClient())
+
+    confessions = [
+        m for m in round_log.messages
+        if m.visibility == Visibility.PRIVATE and m.recipients == []
+    ]
+    assert len(confessions) == 2
+    assert {m.text for m in confessions} == {"I don't trust Mira at all."}
 
 
 @pytest.mark.asyncio
@@ -1197,6 +1283,16 @@ async def advance_round(show: Show, llm_client, store=None) -> RoundLog:
                 for msg in log.messages:
                     if msg.id == leaked_id:
                         msg.released = True
+        if result["confession"]:
+            round_messages.append(Message(
+                id=f"r{show.current_round}-{agent.id}-confession",
+                round=show.current_round,
+                sender_id=agent.id,
+                text=result["confession"],
+                kind=MessageKind.ACTION,
+                visibility=Visibility.PRIVATE,
+                recipients=[],
+            ))
 
     gm_rulings = run_gm_review(show, round_messages, llm_client)
     round_messages.extend(gm_rulings)
@@ -1216,7 +1312,7 @@ async def advance_round(show: Show, llm_client, store=None) -> RoundLog:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_orchestrator.py -v`
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1236,10 +1332,11 @@ git commit -m "feat: add round orchestrator tying agent, GM, and narrator runner
 **Interfaces:**
 - Consumes: `Show`, `Agent`, `AgentStatus`, `ShowStatus` (Task 1); `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT`, `PRESET_AGENT_PERSONALITIES`, `build_preset_agent` (Task 2); `ShowStore` (Task 7); `advance_round` (Task 8).
 - Produces: `create_app(store: ShowStore, llm_client) -> FastAPI` with routes:
-  - `POST /shows` — body `{title, show_prompt?, gm_prompt?, rules_text?, max_rounds?, agent_preset_ids: [str] * 5}` → `Show.to_dict()`, `400` if `agent_preset_ids` length != 5. `max_rounds` is optional (omit or `null` = unlimited, producer ends manually).
+  - `POST /shows` — body `{title, show_prompt?, gm_prompt?, rules_text?, max_rounds?, secret_connections?: [{agent_a, agent_b, connection_note}], agent_preset_ids: [str] * 5}` → `Show.to_dict()`, `400` if `agent_preset_ids` length != 5. `max_rounds` is optional (omit or `null` = unlimited, producer ends manually). `secret_connections` is optional — each entry sets a symmetric Mirror Pair between two of the five chosen agents (both get `connected_to`/`connection_note` set to each other).
   - `GET /shows/{show_id}` → `Show.to_dict()`.
   - `POST /shows/{show_id}/advance` → `RoundLog.to_dict()`, `409` if `show.max_rounds` is set and `show.current_round` has already reached it (and sets `show.status = ShowStatus.ENDED` at that point).
   - `POST /shows/{show_id}/agents/{agent_id}/pause|resume|kill` → `Agent.to_dict()`.
+  - `POST /shows/{show_id}/messages/{message_id}/release` → `Message.to_dict()` with `released` forced to `True` — this is the Judge/Audience Wildcard "reveal a secret" power: the producer can release any private message (a DM or a confession) into the public log without an agent having to choose to leak it. `404` if `message_id` isn't found in any of the show's round logs.
 - This is the seam the frontend (Tasks 11-13) calls over HTTP.
 
 - [ ] **Step 1: Write the failing test**
@@ -1344,6 +1441,54 @@ def test_advance_round_rejected_once_max_rounds_reached(tmp_path):
     assert show_state["status"] == "ended"
 
 
+def test_create_show_applies_secret_connections_symmetrically(tmp_path):
+    client, _ = make_client(tmp_path)
+    response = client.post("/shows", json={
+        "title": "Sheesha Ghar",
+        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
+        "secret_connections": [
+            {"agent_a": "strategist", "agent_b": "diplomat", "connection_note": "Former business partners."},
+        ],
+    })
+    data = response.json()
+    contestants = {c["id"]: c for c in data["contestants"]}
+    assert contestants["strategist"]["connected_to"] == "diplomat"
+    assert contestants["strategist"]["connection_note"] == "Former business partners."
+    assert contestants["diplomat"]["connected_to"] == "strategist"
+    assert contestants["diplomat"]["connection_note"] == "Former business partners."
+
+
+def test_release_message_marks_it_released(tmp_path):
+    client, store = make_client(tmp_path)
+    create_response = client.post("/shows", json={
+        "title": "Sheesha Ghar",
+        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
+    })
+    show_id = create_response.json()["id"]
+    client.post(f"/shows/{show_id}/advance")
+    show = store.get(show_id)
+    message_id = show.round_logs[0].messages[0].id
+
+    response = client.post(f"/shows/{show_id}/messages/{message_id}/release")
+
+    assert response.status_code == 200
+    assert response.json()["released"] is True
+    assert show.round_logs[0].messages[0].released is True
+
+
+def test_release_message_missing_id_returns_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    create_response = client.post("/shows", json={
+        "title": "Sheesha Ghar",
+        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
+    })
+    show_id = create_response.json()["id"]
+
+    response = client.post(f"/shows/{show_id}/messages/does-not-exist/release")
+
+    assert response.status_code == 404
+
+
 def test_pause_resume_kill_agent(tmp_path):
     client, _ = make_client(tmp_path)
     create_response = client.post("/shows", json={
@@ -1379,12 +1524,19 @@ from .store import ShowStore
 from .orchestrator import advance_round
 
 
+class SecretConnection(BaseModel):
+    agent_a: str
+    agent_b: str
+    connection_note: str
+
+
 class CreateShowRequest(BaseModel):
     title: str
     show_prompt: str = DEFAULT_SHOW_PROMPT
     gm_prompt: str = DEFAULT_GM_PROMPT
     rules_text: str = DEFAULT_RULES_TEXT
     max_rounds: int = None
+    secret_connections: list = []
     agent_preset_ids: list
 
 
@@ -1406,6 +1558,13 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
             contestants=[build_preset_agent(pid) for pid in req.agent_preset_ids],
             status=ShowStatus.RUNNING,
         )
+        for connection in req.secret_connections:
+            agent_a = show.get_agent(connection["agent_a"])
+            agent_b = show.get_agent(connection["agent_b"])
+            agent_a.connected_to = agent_b.id
+            agent_a.connection_note = connection["connection_note"]
+            agent_b.connected_to = agent_a.id
+            agent_b.connection_note = connection["connection_note"]
         store.add(show)
         return show.to_dict()
 
@@ -1442,13 +1601,23 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
         agent.status = AgentStatus.ELIMINATED
         return agent.to_dict()
 
+    @app.post("/shows/{show_id}/messages/{message_id}/release")
+    def release_message(show_id: str, message_id: str):
+        show = store.get(show_id)
+        for log in show.round_logs:
+            for message in log.messages:
+                if message.id == message_id:
+                    message.released = True
+                    return message.to_dict()
+        raise HTTPException(404, "No message with that id")
+
     return app
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_api.py -v`
-Expected: 7 passed.
+Expected: 9 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1555,12 +1724,19 @@ from .orchestrator import advance_round
 from .ws import ConnectionManager
 
 
+class SecretConnection(BaseModel):
+    agent_a: str
+    agent_b: str
+    connection_note: str
+
+
 class CreateShowRequest(BaseModel):
     title: str
     show_prompt: str = DEFAULT_SHOW_PROMPT
     gm_prompt: str = DEFAULT_GM_PROMPT
     rules_text: str = DEFAULT_RULES_TEXT
     max_rounds: int = None
+    secret_connections: list = []
     agent_preset_ids: list
 
 
@@ -1583,6 +1759,13 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
             contestants=[build_preset_agent(pid) for pid in req.agent_preset_ids],
             status=ShowStatus.RUNNING,
         )
+        for connection in req.secret_connections:
+            agent_a = show.get_agent(connection["agent_a"])
+            agent_b = show.get_agent(connection["agent_b"])
+            agent_a.connected_to = agent_b.id
+            agent_a.connection_note = connection["connection_note"]
+            agent_b.connected_to = agent_a.id
+            agent_b.connection_note = connection["connection_note"]
         store.add(show)
         return show.to_dict()
 
@@ -1620,6 +1803,16 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
         agent = store.get(show_id).get_agent(agent_id)
         agent.status = AgentStatus.ELIMINATED
         return agent.to_dict()
+
+    @app.post("/shows/{show_id}/messages/{message_id}/release")
+    def release_message(show_id: str, message_id: str):
+        show = store.get(show_id)
+        for log in show.round_logs:
+            for message in log.messages:
+                if message.id == message_id:
+                    message.released = True
+                    return message.to_dict()
+        raise HTTPException(404, "No message with that id")
 
     @app.websocket("/ws/{show_id}")
     async def show_socket(websocket: WebSocket, show_id: str):
@@ -1669,7 +1862,7 @@ git commit -m "feat: add WebSocket round broadcast and process entrypoint"
 - Test: `frontend/src/api/client.test.js`
 
 **Interfaces:**
-- Produces (in `frontend/src/api/client.js`): `createShow(payload) -> Promise<Show>`, `getShow(showId) -> Promise<Show>`, `advanceRound(showId) -> Promise<RoundLog>`, `pauseAgent(showId, agentId) -> Promise<Agent>`, `resumeAgent(showId, agentId) -> Promise<Agent>`, `killAgent(showId, agentId) -> Promise<Agent>`. Each does `fetch` against `` `${API_BASE}/...` `` and returns parsed JSON; throws on non-2xx.
+- Produces (in `frontend/src/api/client.js`): `createShow(payload) -> Promise<Show>`, `getShow(showId) -> Promise<Show>`, `advanceRound(showId) -> Promise<RoundLog>`, `pauseAgent(showId, agentId) -> Promise<Agent>`, `resumeAgent(showId, agentId) -> Promise<Agent>`, `killAgent(showId, agentId) -> Promise<Agent>`, `releaseMessage(showId, messageId) -> Promise<Message>`. Each does `fetch` against `` `${API_BASE}/...` `` and returns parsed JSON; throws on non-2xx.
 - Produces (in `frontend/src/presets.js`): `PRESET_AGENTS` (mirrors backend `PRESET_AGENT_PERSONALITIES` ids/names — used by Task 12's picker) and `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT` (mirrors backend `presets.py` defaults, for pre-filling the setup form).
 - This is the only module in the frontend allowed to call `fetch` for backend calls — components (Tasks 12-13) import from here.
 
@@ -1721,7 +1914,7 @@ Create `frontend/src/api/client.test.js`:
 
 ```javascript
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createShow, getShow, advanceRound, pauseAgent, resumeAgent, killAgent } from "./client";
+import { createShow, getShow, advanceRound, pauseAgent, resumeAgent, killAgent, releaseMessage } from "./client";
 
 beforeEach(() => {
   global.fetch = vi.fn();
@@ -1785,6 +1978,16 @@ describe("api client", () => {
     );
   });
 
+  it("releaseMessage posts to the message release route", async () => {
+    global.fetch.mockReturnValue(mockJsonResponse({ id: "m1", released: true }));
+    const result = await releaseMessage("sheesha-ghar", "m1");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/messages/m1/release"),
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(result).toEqual({ id: "m1", released: true });
+  });
+
   it("throws when the response is not ok", async () => {
     global.fetch.mockReturnValue(mockJsonResponse({ detail: "bad request" }, false));
     await expect(getShow("missing")).rejects.toThrow();
@@ -1838,6 +2041,10 @@ export function resumeAgent(showId, agentId) {
 export function killAgent(showId, agentId) {
   return request(`/shows/${showId}/agents/${agentId}/kill`, { method: "POST" });
 }
+
+export function releaseMessage(showId, messageId) {
+  return request(`/shows/${showId}/messages/${messageId}/release`, { method: "POST" });
+}
 ```
 
 Create `frontend/src/presets.js` (mirrors `backend/app/presets.py` — kept in sync by hand for the hackathon):
@@ -1875,7 +2082,7 @@ export const DEFAULT_RULES_TEXT =
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test`
-Expected: 5 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2215,17 +2422,18 @@ git commit -m "feat: add Live Room roster with pause/resume/kill controls and ad
 - Test: `frontend/src/components/RoundFeed.test.jsx`
 
 **Interfaces:**
-- Consumes: nothing beyond React state — pure presentational component driven by `round_logs` data shaped like `Show.round_logs` from the backend (`RoundLog.to_dict()` shape: `{round_number, messages: [{id, round, sender_id, text, kind, visibility, recipients, released}], narrative}`).
-- Produces: `RoundFeed({ roundLogs })` — renders a two-tab view: "Live Round Feed" (all messages from all rounds, every message shown regardless of visibility — per spec §6, viewers are always omniscient) and "Full Story" (just the concatenated `narrative` strings, one per round, in order).
+- Consumes: `releaseMessage` from `../api/client` (Task 11). Otherwise driven by `round_logs` data shaped like `Show.round_logs` from the backend (`RoundLog.to_dict()` shape: `{round_number, messages: [{id, round, sender_id, text, kind, visibility, recipients, released}], narrative}`).
+- Produces: `RoundFeed({ showId, roundLogs, onMessageReleased })` — renders a two-tab view: "Live Round Feed" (all messages from all rounds, every message shown regardless of visibility — per spec §6, viewers are always omniscient) and "Full Story" (just the concatenated `narrative` strings, one per round, in order). Unreleased private messages in the Live Round Feed tab get a "Reveal" button (the Judge/Audience Wildcard) that calls `releaseMessage(showId, message.id)` and then calls `onMessageReleased(updatedMessage)`.
 
 - [ ] **Step 1: Write the failing test**
 
 Create `frontend/src/components/RoundFeed.test.jsx`:
 
 ```javascript
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import RoundFeed from "./RoundFeed";
+import * as api from "../api/client";
 
 const roundLogs = [
   {
@@ -2239,21 +2447,41 @@ const roundLogs = [
   },
 ];
 
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("RoundFeed", () => {
   it("Live Round Feed tab shows every message including private ones", () => {
-    render(<RoundFeed roundLogs={roundLogs} />);
+    render(<RoundFeed showId="sheesha-ghar" roundLogs={roundLogs} onMessageReleased={() => {}} />);
     expect(screen.getByText("I trust no one.")).toBeInTheDocument();
     expect(screen.getByText("Let's team up.")).toBeInTheDocument();
     expect(screen.getByText("Vikram warned.")).toBeInTheDocument();
   });
 
   it("Full Story tab shows only the narrative text", () => {
-    render(<RoundFeed roundLogs={roundLogs} />);
+    render(<RoundFeed showId="sheesha-ghar" roundLogs={roundLogs} onMessageReleased={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /full story/i }));
 
     expect(screen.getByText("The house settled into an uneasy quiet.")).toBeInTheDocument();
     expect(screen.queryByText("I trust no one.")).not.toBeInTheDocument();
     expect(screen.queryByText("Let's team up.")).not.toBeInTheDocument();
+  });
+
+  it("shows a Reveal button only on unreleased private messages, and releasing calls the API", async () => {
+    const releaseSpy = vi
+      .spyOn(api, "releaseMessage")
+      .mockResolvedValue({ id: "m2", released: true });
+    const onMessageReleased = vi.fn();
+
+    render(<RoundFeed showId="sheesha-ghar" roundLogs={roundLogs} onMessageReleased={onMessageReleased} />);
+
+    expect(screen.queryByRole("button", { name: /reveal/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /reveal/i }));
+
+    await waitFor(() => expect(releaseSpy).toHaveBeenCalledWith("sheesha-ghar", "m2"));
+    expect(onMessageReleased).toHaveBeenCalledWith({ id: "m2", released: true });
   });
 });
 ```
@@ -2267,9 +2495,15 @@ Expected: FAIL — `frontend/src/components/RoundFeed.jsx` does not exist yet.
 
 ```javascript
 import { useState } from "react";
+import { releaseMessage } from "../api/client";
 
-export default function RoundFeed({ roundLogs }) {
+export default function RoundFeed({ showId, roundLogs, onMessageReleased }) {
   const [tab, setTab] = useState("live");
+
+  async function handleReveal(messageId) {
+    const updated = await releaseMessage(showId, messageId);
+    onMessageReleased(updated);
+  }
 
   return (
     <div>
@@ -2285,6 +2519,9 @@ export default function RoundFeed({ roundLogs }) {
                 <p key={message.id}>
                   {message.visibility === "private" && !message.released ? "[viewers only] " : ""}
                   {message.sender_id}: {message.text}
+                  {message.visibility === "private" && !message.released && (
+                    <button onClick={() => handleReveal(message.id)}>Reveal</button>
+                  )}
                 </p>
               ))}
             </div>
