@@ -11,6 +11,8 @@ export default function ShowSetup({ onCreated }) {
   const [rulesText, setRulesText] = useState(DEFAULT_RULES_TEXT);
   const [maxRounds, setMaxRounds] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
+  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   function toggleAgent(id) {
     setSelectedIds((current) =>
@@ -22,15 +24,23 @@ export default function ShowSetup({ onCreated }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    const show = await createShow({
-      title,
-      show_prompt: showPrompt,
-      gm_prompt: gmPrompt,
-      rules_text: rulesText,
-      max_rounds: maxRounds === "" ? null : Number(maxRounds),
-      agent_preset_ids: selectedIds,
-    });
-    onCreated(show);
+    setError(null);
+    setSubmitting(true);
+    try {
+      const show = await createShow({
+        title,
+        show_prompt: showPrompt,
+        gm_prompt: gmPrompt,
+        rules_text: rulesText,
+        max_rounds: maxRounds === "" ? null : Number(maxRounds),
+        agent_preset_ids: selectedIds,
+      });
+      onCreated(show);
+    } catch (err) {
+      setError(err.message || "Failed to start show");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -83,8 +93,10 @@ export default function ShowSetup({ onCreated }) {
         ))}
       </fieldset>
 
-      <button type="submit" disabled={selectedIds.length !== 5}>
-        Start show
+      {error && <p role="alert">{error}</p>}
+
+      <button type="submit" disabled={selectedIds.length !== 5 || submitting}>
+        {submitting ? "Starting…" : "Start show"}
       </button>
     </form>
   );

@@ -241,5 +241,16 @@ describe("WorldEngine onFrame", () => {
     expect(onFrame).toHaveBeenCalled();
     const snapshot = onFrame.mock.calls[onFrame.mock.calls.length - 1][0];
     expect(snapshot.characters[0].bubble).toEqual({ kind: "public", text: "hello house" });
+    expect(snapshot.dialogueBusy).toBe(true);
+  });
+
+  it("reports dialogueBusy false when no speech is queued or playing", () => {
+    const onFrame = vi.fn();
+    const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages(), {
+      rng: () => 0, onFrame,
+    });
+    engine.draw();
+    const snapshot = onFrame.mock.calls[onFrame.mock.calls.length - 1][0];
+    expect(snapshot.dialogueBusy).toBe(false);
   });
 });

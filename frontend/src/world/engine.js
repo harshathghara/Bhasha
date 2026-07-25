@@ -182,6 +182,11 @@ export class WorldEngine {
   }
 
   buildFrameSnapshot() {
+    const dialogueBusy = this.characters.some((character) => (
+      character.queue.length > 0
+      || character.mode === "interacting"
+      || character.mode === "walking-to-interact"
+    ));
     return {
       characters: this.characters.map((character) => {
         const { pixelX, pixelY } = characterPixelPosition(character);
@@ -197,6 +202,7 @@ export class WorldEngine {
         };
       }),
       gmBanner: this.gmBanner ? { text: this.gmBanner.text } : null,
+      dialogueBusy,
     };
   }
 }

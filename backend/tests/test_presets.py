@@ -13,17 +13,20 @@ def test_defaults_are_nonempty_strings():
     assert DEFAULT_RULES_TEXT and isinstance(DEFAULT_RULES_TEXT, str)
 
 
-def test_preset_pool_has_eight_unique_personalities():
-    assert len(PRESET_AGENT_PERSONALITIES) == 8
-    assert len({p["id"] for p in PRESET_AGENT_PERSONALITIES}) == 8
+def test_preset_pool_has_five_unique_murder_cast_personalities():
+    assert len(PRESET_AGENT_PERSONALITIES) == 5
+    assert len({p["id"] for p in PRESET_AGENT_PERSONALITIES}) == 5
+    assert {p["id"] for p in PRESET_AGENT_PERSONALITIES} == {
+        "creditor", "wife", "lawyer", "brother", "househelp",
+    }
     for preset in PRESET_AGENT_PERSONALITIES:
         assert preset["name"] and preset["personality_prompt"]
 
 
 def test_build_preset_agent_returns_active_agent():
-    agent = build_preset_agent("strategist")
+    agent = build_preset_agent("creditor")
     assert isinstance(agent, Agent)
-    assert agent.id == "strategist"
+    assert agent.id == "creditor"
     assert agent.status == AgentStatus.ACTIVE
 
 

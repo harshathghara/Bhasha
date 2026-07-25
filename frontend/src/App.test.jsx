@@ -16,7 +16,13 @@ describe("App", () => {
     expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start show/i })).toBeInTheDocument();
 
-    const names = ["The Strategist", "The Diplomat", "The Loyalist", "The Operator", "The Wildcard"];
+    const names = [
+      "Vikram Sethi — The Creditor",
+      "Priya Malhotra — The Wife",
+      "Arjun Mehta — The Lawyer",
+      "Karan Malhotra — The Brother",
+      "Meena Devi — The Househelp",
+    ];
     names.forEach((name) => fireEvent.click(screen.getByLabelText(name)));
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
