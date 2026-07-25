@@ -79,8 +79,7 @@ Event
 
 Agent
   id, name, personality_prompt
-  status: active | warned | paused | eliminated
-  memory: [str]               # what this agent has processed
+  status: active | warned | eliminated
   warnings: int
   connected_to: agent_id | None      # Mirror Pair
   connection_note: str
@@ -96,13 +95,22 @@ Show
   narratives: {round: str}
 
 RoundConfig
-  action_budget: int = 4          # max acts per agent per round (cost ceiling)
-  debounce_seconds: float = 0.8   # batch window before an agent thinks
-  cooldown_seconds: float = 3.0   # forced gap after an agent acts
+  action_budget: int = 4              # max acts per agent per round (cost ceiling)
+  debounce_seconds: float = 0.8       # batch window before an agent thinks
+  cooldown_seconds: float = 3.0       # forced gap after an agent acts
   quiescence_seconds: float = 5.0
   round_timeout_seconds: float = 180.0
-  gm_review_every: int = 3        # GM wakes every N events it sees
+  gm_review_every: int = 3            # GM wakes every N events it sees
+  context_window_events: int = 60     # most recent visible events fed to an agent
 ```
+
+**Agents have no memory field.** An agent's knowledge is *derived* from the
+event log by filtering it through the same visibility predicate the bus uses for
+fan-out. The log is the single source of truth for who knows what. This matters:
+an earlier design accumulated memory from the inbox, which meant an agent that
+spent its action budget early stopped receiving events and was permanently blind
+to the rest of the round. Deriving from the log removes that whole class of bug —
+an agent that has stopped acting still *knows* what happened while it was quiet.
 
 ## 5. Round lifecycle
 
@@ -116,11 +124,15 @@ starts on a seed event and ends when one of the termination conditions fires.
    publishes a round-opening announcement as a public event; it fans out to all
    inboxes and wakes all agents at once.
 3. **Agent loop** (each agent, independently and concurrently):
-   - block on inbox until an event arrives
-   - sleep `debounce_seconds`, then drain **everything** now in the inbox
+   - block on inbox until an event arrives, then sleep `debounce_seconds` and
+     drain the inbox. The inbox is purely a **wake signal** — draining it says
+     "something happened worth thinking about," nothing more.
+   - build context by filtering the event log through the visibility predicate
+     and taking the most recent `context_window_events` the agent may see. This
+     includes the agent's own past actions, so it remembers what it said.
    - one tool-calling LLM call with: personality + secret connection + show
-     state + own memory + the whole drained batch
-   - dispatch resulting tool calls to the bus, append batch to own memory
+     state + that context window
+   - dispatch resulting tool calls to the bus
    - `actions_remaining -= 1`, sleep `cooldown_seconds`, repeat
 4. **Agent tools:** `speak_public(text)`, `send_private(to, text)`,
    `confess(text)`, `stay_silent()`. One wake may emit several calls, so an agent
@@ -169,9 +181,11 @@ half-formed action is not lost.
 
 ## 7. Two audiences, one log
 
-- **Agent context** (fed to LLM calls): filtered by the bus at fan-out time. An
-  agent's inbox only ever receives public events, released events, and private
-  events where it is a recipient. It never receives its own events back.
+- **Agent context** (fed to LLM calls): the event log filtered through the bus's
+  visibility predicate — public events, released events, private events where the
+  agent is a recipient, and its own past actions.
+- **Agent inbox** (the wake signal): the same filter minus the agent's own
+  events, since echoing an agent's own words back to it is not news.
 - **GM context:** sees everything, including unreleased private events and
   confessions.
 - **Viewer feed and story** (frontend): unfiltered. Every public event, every
@@ -185,20 +199,23 @@ is never retroactively hidden from viewers, who already saw it.
 
 ## 8. Agent lifecycle controls
 
-- **Pause.** `status = paused`. The agent's loop holds its current batch and
-  stops acting, but its inbox keeps filling. On resume it processes everything it
-  missed at once — a paused agent comes back and reacts to the whole argument it
-  slept through.
 - **Kill.** `status = eliminated`. Task cancelled, unsubscribed from the bus,
   excluded from all future rounds. Triggered by the producer or by a GM `eject`.
 - **Warn.** GM-only. Increments `warnings`, sets `status = warned`, no functional
   lockout, but the ruling is a public event so the agent sees it and can respond.
 
+There is deliberately **no pause**. Pausing an individual agent bought nothing
+the action budget, `kill`, and the producer stop control do not already cover,
+and as an out-of-band toggle it was invisible to the other agents, so it carried
+no story value either. If it returns, it should return as an in-fiction
+mechanic — a GM `silence(agent_id, reason)` tool that publishes publicly, so the
+house can scheme in front of someone who is listening but muzzled. See §11.
+
 ## 9. Frontend (React)
 
 1. **Show Setup** — title, rounds cap, show/GM/rules prompt textareas, pick 5 of
    the preset pool, optionally define secret connections.
-2. **Live Room** — the roster with status pills and pause/resume/kill controls,
+2. **Live Room** — the roster with status pills and a kill control,
    a Start Round button, a producer Stop button, and the live event feed
    streaming over WebSocket as events are published.
 3. **Story** — the accumulated per-round narratives, read as an episode recap.
@@ -213,12 +230,17 @@ is never retroactively hidden from viewers, who already saw it.
 
 ## 11. Explicit cut list (stretch only, in this order)
 
-1. Stage/phase system with auto-pause at stage boundaries.
-2. Per-agent-targeted producer notes injected mid-round.
-3. Mid-show rule editing.
-4. POV toggle in the viewer UI (the visibility model already supports it; only
+1. Mid-round and between-round producer interaction: rule edits, per-agent
+   targeted notes, and scenario changes applied without restarting the show.
+2. Agent silencing as an in-fiction GM tool (see §8) — worth building only once
+   producer interaction above exists to motivate it.
+3. Stage/phase system with auto-pause at stage boundaries.
+4. A show end condition beyond `max_rounds` — last agent standing, or a goal the
+   show definition declares. Deferred because it depends on what kind of game the
+   show turns out to be, which is not yet decided.
+5. POV toggle in the viewer UI (the visibility model already supports it; only
    the UI affordance is missing — see `glass-house-mockup.html`).
-5. Loyalty ledger — a trust/suspicion score per agent pair fed back into context.
+6. Loyalty ledger — a trust/suspicion score per agent pair fed back into context.
 
 ## 12. Out of scope entirely
 

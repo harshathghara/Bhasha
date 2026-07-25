@@ -59,11 +59,11 @@ frontend/
 - Test: `backend/tests/test_models.py`
 
 **Interfaces:**
-- Produces enums (all `str, Enum`): `AgentStatus` (ACTIVE/WARNED/PAUSED/ELIMINATED), `ShowStatus` (SETUP/RUNNING/PAUSED/ENDED), `EventKind` (AGENT_ACTION/CONFESSION/GM_RULING/GM_ANNOUNCEMENT/NARRATION), `Visibility` (PUBLIC/PRIVATE).
+- Produces enums (all `str, Enum`): `AgentStatus` (ACTIVE/WARNED/ELIMINATED — **no PAUSED**), `ShowStatus` (SETUP/RUNNING/PAUSED/ENDED), `EventKind` (AGENT_ACTION/CONFESSION/GM_RULING/GM_ANNOUNCEMENT/NARRATION), `Visibility` (PUBLIC/PRIVATE).
 - Produces `Event(seq, round, sender_id, text, kind=AGENT_ACTION, visibility=PUBLIC, recipients=[], released=False, timestamp=0.0)` with `.to_dict()`.
-- Produces `Agent(id, name, personality_prompt, status=ACTIVE, memory=[], warnings=0, connected_to=None, connection_note="", actions_remaining=0)` with `.to_dict()`.
+- Produces `Agent(id, name, personality_prompt, status=ACTIVE, warnings=0, connected_to=None, connection_note="", actions_remaining=0)` with `.to_dict()`. **Agents have no `memory` field** — knowledge is derived from the event log in Task 3.
 - Produces `Show(id, title, show_prompt, gm_prompt, rules_text, contestants=[], status=SETUP, current_round=0, max_rounds=None, events=[], narratives={})` with `.get_agent(id)` (raises `KeyError`), `.active_agents()` (status ACTIVE or WARNED), `.events_for_round(n)`, `.to_dict()`.
-- Produces `RoundConfig(action_budget=4, debounce_seconds=0.8, cooldown_seconds=3.0, quiescence_seconds=5.0, round_timeout_seconds=180.0, gm_review_every=3)`.
+- Produces `RoundConfig(action_budget=4, debounce_seconds=0.8, cooldown_seconds=3.0, quiescence_seconds=5.0, round_timeout_seconds=180.0, gm_review_every=3, context_window_events=60)`.
 - Produces constant `GM_ID = "game_master"`.
 
 - [ ] **Step 1: Scaffold and write the failing test**
@@ -101,10 +101,13 @@ def test_event_defaults():
 def test_agent_defaults():
     agent = Agent(id="vikram", name="Vikram", personality_prompt="Be ruthless.")
     assert agent.status == AgentStatus.ACTIVE
-    assert agent.memory == []
     assert agent.connected_to is None
     assert agent.actions_remaining == 0
     assert agent.to_dict()["status"] == "active"
+
+
+def test_agent_status_has_no_paused_state():
+    assert not hasattr(AgentStatus, "PAUSED")
 
 
 def test_show_get_agent_found_and_missing():
@@ -116,12 +119,11 @@ def test_show_get_agent_found_and_missing():
         show.get_agent("missing")
 
 
-def test_active_agents_excludes_paused_and_eliminated():
+def test_active_agents_excludes_eliminated():
     agents = [
         Agent(id="a", name="A", personality_prompt="p"),
         Agent(id="b", name="B", personality_prompt="p", status=AgentStatus.WARNED),
-        Agent(id="c", name="C", personality_prompt="p", status=AgentStatus.PAUSED),
-        Agent(id="d", name="D", personality_prompt="p", status=AgentStatus.ELIMINATED),
+        Agent(id="c", name="C", personality_prompt="p", status=AgentStatus.ELIMINATED),
     ]
     show = Show(id="s1", title="T", show_prompt="p", gm_prompt="g",
                 rules_text="r", contestants=agents)
@@ -139,6 +141,7 @@ def test_round_config_defaults():
     config = RoundConfig()
     assert config.action_budget == 4
     assert config.gm_review_every == 3
+    assert config.context_window_events == 60
     assert GM_ID == "game_master"
 ```
 
@@ -159,7 +162,6 @@ GM_ID = "game_master"
 class AgentStatus(str, Enum):
     ACTIVE = "active"
     WARNED = "warned"
-    PAUSED = "paused"
     ELIMINATED = "eliminated"
 
 
@@ -215,7 +217,6 @@ class Agent:
     name: str
     personality_prompt: str
     status: AgentStatus = AgentStatus.ACTIVE
-    memory: list = field(default_factory=list)
     warnings: int = 0
     connected_to: str = None
     connection_note: str = ""
@@ -227,7 +228,6 @@ class Agent:
             "name": self.name,
             "personality_prompt": self.personality_prompt,
             "status": self.status.value,
-            "memory": list(self.memory),
             "warnings": self.warnings,
             "connected_to": self.connected_to,
             "connection_note": self.connection_note,
@@ -288,12 +288,13 @@ class RoundConfig:
     quiescence_seconds: float = 5.0
     round_timeout_seconds: float = 180.0
     gm_review_every: int = 3
+    context_window_events: int = 60
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_models.py -v`
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -458,7 +459,9 @@ git commit -m "feat: add default prompts and preset agent pool"
   - `.add_listener(fn)` — viewer/WebSocket hook. Listeners see every event.
   - `.in_flight: int` — incremented before each LLM call by the loops, decremented after. Read by the end watcher.
   - `.all_inboxes_empty() -> bool`
-- **This is the only place visibility is enforced.** `_is_visible_to(event, subscriber_id)`: never echo to the sender; `GM_ID` sees everything; public or released events go to everyone; private events only to `recipients`.
+  - `.can_see(event, subscriber_id) -> bool` — entitlement. `GM_ID` sees everything; an agent sees its own events, all public and released events, and private events naming it as a recipient.
+  - `.visible_events_for(subscriber_id, limit=None) -> list[Event]` — the log filtered by `can_see`, optionally the last `limit` only. **This is how agent context is built** (Task 6), replacing per-agent accumulated memory.
+- **This is the only place visibility is enforced.** `_is_visible_to` is `can_see` minus self-echo, and governs inbox fan-out only; an agent should not be woken by its own words, but must still remember saying them.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -563,6 +566,46 @@ async def test_listeners_receive_every_event_unfiltered():
 
 
 @pytest.mark.asyncio
+async def test_visible_events_for_includes_own_events_unlike_the_inbox():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = bus.subscribe("vikram")
+
+    bus.publish("vikram", "I trust no one.")
+
+    assert vikram.empty()   # not woken by own words
+    assert [e.text for e in bus.visible_events_for("vikram")] == ["I trust no one."]
+
+
+@pytest.mark.asyncio
+async def test_visible_events_for_excludes_other_peoples_private_traffic():
+    show = make_show()
+    bus = EventBus(show)
+
+    bus.publish("meera", "Public line.")
+    bus.publish("meera", "Secret to Karan.", visibility=Visibility.PRIVATE,
+                recipients=["karan"])
+    bus.publish("meera", "My private thought.", kind=EventKind.CONFESSION,
+                visibility=Visibility.PRIVATE, recipients=[])
+
+    assert [e.text for e in bus.visible_events_for("vikram")] == ["Public line."]
+    assert len(bus.visible_events_for("karan")) == 2
+    assert len(bus.visible_events_for(GM_ID)) == 3
+
+
+@pytest.mark.asyncio
+async def test_visible_events_for_respects_limit_and_keeps_the_newest():
+    show = make_show()
+    bus = EventBus(show)
+    for index in range(5):
+        bus.publish("meera", f"line {index}")
+
+    recent = bus.visible_events_for("vikram", limit=2)
+
+    assert [e.text for e in recent] == ["line 3", "line 4"]
+
+
+@pytest.mark.asyncio
 async def test_all_inboxes_empty_reflects_queue_state():
     show = make_show()
     bus = EventBus(show)
@@ -611,6 +654,22 @@ class EventBus:
     def all_inboxes_empty(self) -> bool:
         return all(queue.empty() for queue in self.inboxes.values())
 
+    def can_see(self, event: Event, subscriber_id: str) -> bool:
+        """Whether this subscriber is entitled to know about this event at all."""
+        if subscriber_id == GM_ID:
+            return True
+        if subscriber_id == event.sender_id:
+            return True
+        if event.visibility == Visibility.PUBLIC or event.released:
+            return True
+        return subscriber_id in event.recipients
+
+    def visible_events_for(self, subscriber_id: str, limit: int = None) -> list:
+        events = [e for e in self.show.events if self.can_see(e, subscriber_id)]
+        if limit is not None:
+            return events[-limit:]
+        return events
+
     def publish(self, sender_id: str, text: str,
                 kind: EventKind = EventKind.AGENT_ACTION,
                 visibility: Visibility = Visibility.PUBLIC,
@@ -637,19 +696,17 @@ class EventBus:
         return event
 
     def _is_visible_to(self, event: Event, subscriber_id: str) -> bool:
+        """Inbox fan-out: entitlement, minus self-echo. An agent is never woken
+        by its own words, but visible_events_for still remembers them."""
         if subscriber_id == event.sender_id:
             return False
-        if subscriber_id == GM_ID:
-            return True
-        if event.visibility == Visibility.PUBLIC or event.released:
-            return True
-        return subscriber_id in event.recipients
+        return self.can_see(event, subscriber_id)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_event_bus.py -v`
-Expected: 7 passed.
+Expected: 10 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -972,9 +1029,9 @@ git commit -m "feat: add OpenAI client with tool calling support"
 
 **Interfaces:**
 - Consumes `EventBus` (Task 3), `AGENT_TOOLS` (Task 4), models and `RoundConfig` (Task 1), any client with `.complete_with_tools()` (Task 5).
-- Produces `build_agent_prompt(show, agent, batch) -> tuple[str, str]` — system prompt carries personality, show premise, rules, and the secret connection note if `agent.connected_to` is set; user prompt carries the agent's memory and the drained batch.
+- Produces `build_agent_prompt(show, agent, bus, config) -> tuple[str, str]` — system prompt carries personality, show premise, rules, roster, and the secret connection note if `agent.connected_to` is set. User prompt is built from `bus.visible_events_for(agent.id, config.context_window_events)`, **not** from the drained inbox batch. This is the gap-1 fix: an agent that has spent its budget and stopped receiving inbox events still sees everything that happened while it was quiet, because context comes from the log.
 - Produces `dispatch_agent_calls(bus, agent, calls) -> int` — publishes each tool call to the bus, returns how many events were published. `stay_silent` publishes nothing.
-- Produces `async def run_agent_loop(show, agent, bus, llm_client, config)` — subscribes, then loops: block on inbox, debounce, drain all, hold while paused, one LLM call wrapped in `bus.in_flight` tracking, dispatch, decrement `actions_remaining`, cooldown. Exits when budget is spent, the agent is eliminated, or the task is cancelled. Always unsubscribes on exit.
+- Produces `async def run_agent_loop(show, agent, bus, llm_client, config)` — subscribes, then loops: block on inbox, debounce, drain (purely to consume the wake signal), one LLM call wrapped in `bus.in_flight` tracking, dispatch, decrement `actions_remaining`, cooldown. Exits when budget is spent, the agent is eliminated, or the task is cancelled. Always unsubscribes on exit.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -987,9 +1044,7 @@ import pytest
 
 from app.agent_loop import build_agent_prompt, dispatch_agent_calls, run_agent_loop
 from app.event_bus import EventBus
-from app.models import (
-    Agent, AgentStatus, Event, EventKind, RoundConfig, Show, Visibility,
-)
+from app.models import Agent, AgentStatus, EventKind, RoundConfig, Show, Visibility
 
 
 def make_show():
@@ -1019,27 +1074,58 @@ class FakeLLMClient:
         return self.calls_per_wake.pop(0)
 
 
-def test_build_agent_prompt_includes_batch_and_memory():
+def test_build_agent_prompt_uses_the_visible_log_not_an_inbox_batch():
     show = make_show()
+    bus = EventBus(show)
     agent = show.get_agent("vikram")
-    agent.memory.append("Meera seemed nervous earlier.")
-    batch = [Event(seq=0, round=1, sender_id="meera", text="Let us all be calm.")]
+    bus.publish("meera", "Let us all be calm.")
+    bus.publish("vikram", "I said something earlier.")
 
-    system_prompt, user_prompt = build_agent_prompt(show, agent, batch)
+    system_prompt, user_prompt = build_agent_prompt(show, agent, bus, fast_config())
 
     assert "Be ruthless." in system_prompt
     assert "rules" in system_prompt
-    assert "Meera seemed nervous earlier." in user_prompt
     assert "Let us all be calm." in user_prompt
+    assert "I said something earlier." in user_prompt   # remembers its own words
+
+
+def test_build_agent_prompt_hides_private_traffic_between_others():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    bus.publish("meera", "Public line.")
+    bus.publish("meera", "Not for Vikram.", visibility=Visibility.PRIVATE,
+                recipients=["karan"])
+
+    _, user_prompt = build_agent_prompt(show, agent, bus, fast_config())
+
+    assert "Public line." in user_prompt
+    assert "Not for Vikram." not in user_prompt
+
+
+def test_build_agent_prompt_caps_history_at_the_context_window():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    for index in range(10):
+        bus.publish("meera", f"line {index}")
+
+    _, user_prompt = build_agent_prompt(
+        show, agent, bus, fast_config(context_window_events=3)
+    )
+
+    assert "line 9" in user_prompt
+    assert "line 0" not in user_prompt
 
 
 def test_build_agent_prompt_includes_secret_connection_when_set():
     show = make_show()
+    bus = EventBus(show)
     agent = show.get_agent("vikram")
     agent.connected_to = "meera"
     agent.connection_note = "Meera is Vikram's estranged sister."
 
-    system_prompt, _ = build_agent_prompt(show, agent, [])
+    system_prompt, _ = build_agent_prompt(show, agent, bus, fast_config())
 
     assert "Meera is Vikram's estranged sister." in system_prompt
 
@@ -1100,7 +1186,7 @@ async def test_run_agent_loop_acts_on_inbox_event_then_exits_on_budget():
 
 
 @pytest.mark.asyncio
-async def test_run_agent_loop_drains_whole_batch_into_one_call():
+async def test_run_agent_loop_batches_a_burst_into_one_call():
     show = make_show()
     bus = EventBus(show)
     agent = show.get_agent("vikram")
@@ -1119,6 +1205,30 @@ async def test_run_agent_loop_drains_whole_batch_into_one_call():
     _, user_prompt = llm_client.prompts[0]
     assert "First thing." in user_prompt
     assert "Second thing." in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_agent_that_spent_its_budget_still_sees_later_events():
+    """Gap 1 regression: context comes from the log, not the inbox, so an agent
+    that stopped acting is not blind to what happened afterwards."""
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    agent.actions_remaining = 1
+    llm_client = FakeLLMClient([[{"name": "stay_silent", "arguments": {}}]])
+
+    task = asyncio.create_task(
+        run_agent_loop(show, agent, bus, llm_client, fast_config())
+    )
+    await asyncio.sleep(0)
+    bus.publish("meera", "Round one chatter.")
+    await asyncio.wait_for(task, timeout=2)
+
+    # Budget spent, loop exited, inbox gone. The house keeps talking.
+    bus.publish("meera", "Something said after Vikram went quiet.")
+
+    _, user_prompt = build_agent_prompt(show, agent, bus, fast_config())
+    assert "Something said after Vikram went quiet." in user_prompt
 
 
 @pytest.mark.asyncio
@@ -1146,14 +1256,14 @@ async def test_run_agent_loop_tracks_in_flight_during_the_call():
 
 
 @pytest.mark.asyncio
-async def test_run_agent_loop_holds_while_paused_then_acts_on_resume():
+async def test_run_agent_loop_exits_when_eliminated_mid_round():
     show = make_show()
     bus = EventBus(show)
     agent = show.get_agent("vikram")
-    agent.actions_remaining = 1
-    agent.status = AgentStatus.PAUSED
+    agent.actions_remaining = 5
+    agent.status = AgentStatus.ELIMINATED
     llm_client = FakeLLMClient([
-        [{"name": "speak_public", "arguments": {"text": "I am back."}}],
+        [{"name": "speak_public", "arguments": {"text": "I should not speak."}}],
     ])
 
     task = asyncio.create_task(
@@ -1161,13 +1271,10 @@ async def test_run_agent_loop_holds_while_paused_then_acts_on_resume():
     )
     await asyncio.sleep(0)
     bus.publish("meera", "Anyone awake?")
-    await asyncio.sleep(0.05)
-    assert show.events[-1].sender_id == "meera"
-
-    agent.status = AgentStatus.ACTIVE
     await asyncio.wait_for(task, timeout=2)
 
-    assert show.events[-1].text == "I am back."
+    assert [e.text for e in show.events if e.sender_id == "vikram"] == []
+    assert "vikram" not in bus.inboxes
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1183,10 +1290,8 @@ import asyncio
 from .models import AgentStatus, EventKind, Visibility
 from .tools import AGENT_TOOLS
 
-PAUSE_POLL_SECONDS = 0.05
 
-
-def build_agent_prompt(show, agent, batch) -> tuple:
+def build_agent_prompt(show, agent, bus, config) -> tuple:
     connection_line = ""
     if agent.connected_to:
         connection_line = (
@@ -1210,22 +1315,28 @@ def build_agent_prompt(show, agent, batch) -> tuple:
         "here deserves a response, use stay_silent."
     )
 
-    memory_block = "\n".join(f"- {note}" for note in agent.memory) or "(nothing yet)"
-    batch_block = "\n".join(_format_event(event) for event in batch) or "(nothing new)"
+    visible = bus.visible_events_for(agent.id, config.context_window_events)
+    history = "\n".join(_format_event(event, agent) for event in visible)
 
     user_prompt = (
-        f"What you remember so far:\n{memory_block}\n\n"
-        f"What just happened:\n{batch_block}\n\n"
+        f"Everything you have seen and said so far:\n"
+        f"{history or '(nothing yet)'}\n\n"
         f"It is round {show.current_round}. Decide how you want to act."
     )
     return system_prompt, user_prompt
 
 
-def _format_event(event) -> str:
+def _format_event(event, agent) -> str:
     if event.kind == EventKind.GM_RULING:
         return f"[GAME MASTER RULING] {event.text}"
     if event.kind == EventKind.GM_ANNOUNCEMENT:
         return f"[GAME MASTER] {event.text}"
+    if event.kind == EventKind.CONFESSION:
+        return f"[your own private thought] {event.text}"
+    if event.sender_id == agent.id:
+        if event.visibility == Visibility.PRIVATE and not event.released:
+            return f"[you, privately to {event.recipients}] {event.text}"
+        return f"[you] {event.text}"
     if event.visibility == Visibility.PRIVATE and not event.released:
         return f"[PRIVATE from {event.sender_id}] {event.text}"
     return f"{event.sender_id}: {event.text}"
@@ -1264,18 +1375,18 @@ async def run_agent_loop(show, agent, bus, llm_client, config) -> None:
         while agent.actions_remaining > 0:
             if agent.status == AgentStatus.ELIMINATED:
                 return
-            first = await inbox.get()
+
+            # The inbox is only a wake signal. Draining it says "something
+            # happened"; the context itself is rebuilt from the log below.
+            await inbox.get()
             if config.debounce_seconds:
                 await asyncio.sleep(config.debounce_seconds)
-            batch = [first] + _drain(inbox)
+            _drain(inbox)
 
-            while agent.status == AgentStatus.PAUSED:
-                await asyncio.sleep(PAUSE_POLL_SECONDS)
             if agent.status == AgentStatus.ELIMINATED:
                 return
 
-            batch.extend(_drain(inbox))
-            system_prompt, user_prompt = build_agent_prompt(show, agent, batch)
+            system_prompt, user_prompt = build_agent_prompt(show, agent, bus, config)
 
             bus.in_flight += 1
             try:
@@ -1286,8 +1397,6 @@ async def run_agent_loop(show, agent, bus, llm_client, config) -> None:
             finally:
                 bus.in_flight -= 1
 
-            for event in batch:
-                agent.memory.append(_format_event(event))
             dispatch_agent_calls(bus, agent, calls)
 
             agent.actions_remaining -= 1
@@ -1302,7 +1411,7 @@ async def run_agent_loop(show, agent, bus, llm_client, config) -> None:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_agent_loop.py -v`
-Expected: 8 passed.
+Expected: 11 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2084,7 +2193,7 @@ git commit -m "feat: add round supervisor with budget, quiescence, and timeout e
   - `GET /shows/{show_id}` → `Show.to_dict()`.
   - `POST /shows/{show_id}/rounds` → runs one round to completion, returns `{"round": int, "narrative": str}`; `409` if `max_rounds` already reached, which also sets status ENDED.
   - `POST /shows/{show_id}/stop` → sets the active round's stop event, returns `{"stopped": bool}`.
-  - `POST /shows/{show_id}/agents/{agent_id}/pause|resume|kill` → `Agent.to_dict()`.
+  - `POST /shows/{show_id}/agents/{agent_id}/kill` → `Agent.to_dict()`.
   - `POST /shows/{show_id}/events/{seq}/release` → `Event.to_dict()` with `released=True`; `404` if no such seq.
   - `WS /ws/{show_id}` — every event published during a round is pushed unfiltered as it happens.
 - Produces `backend/app/main.py` wiring a real `OpenAILLMClient` and `ShowStore("snapshots")` for `uvicorn app.main:app`.
@@ -2175,13 +2284,13 @@ def test_round_limit_is_enforced(tmp_path):
     assert client.get(f"/shows/{show_id}").json()["status"] == "ended"
 
 
-def test_pause_resume_kill_agent(tmp_path):
+def test_kill_agent(tmp_path):
     client, _ = make_client(tmp_path)
     show_id = create_show(client).json()["id"]
 
-    assert client.post(f"/shows/{show_id}/agents/strategist/pause").json()["status"] == "paused"
-    assert client.post(f"/shows/{show_id}/agents/strategist/resume").json()["status"] == "active"
-    assert client.post(f"/shows/{show_id}/agents/strategist/kill").json()["status"] == "eliminated"
+    response = client.post(f"/shows/{show_id}/agents/strategist/kill")
+
+    assert response.json()["status"] == "eliminated"
 
 
 def test_release_event_marks_it_released(tmp_path):
@@ -2326,18 +2435,6 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         stop_event.set()
         return {"stopped": True}
 
-    @app.post("/shows/{show_id}/agents/{agent_id}/pause")
-    def pause_agent(show_id: str, agent_id: str):
-        agent = store.get(show_id).get_agent(agent_id)
-        agent.status = AgentStatus.PAUSED
-        return agent.to_dict()
-
-    @app.post("/shows/{show_id}/agents/{agent_id}/resume")
-    def resume_agent(show_id: str, agent_id: str):
-        agent = store.get(show_id).get_agent(agent_id)
-        agent.status = AgentStatus.ACTIVE
-        return agent.to_dict()
-
     @app.post("/shows/{show_id}/agents/{agent_id}/kill")
     def kill_agent(show_id: str, agent_id: str):
         agent = store.get(show_id).get_agent(agent_id)
@@ -2382,7 +2479,7 @@ app = create_app(store, llm_client)
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/ -v`
-Expected: the whole backend suite passes, 60 tests total across all modules.
+Expected: the whole backend suite passes, 67 tests total across all modules.
 
 - [ ] **Step 5: Commit**
 
@@ -2400,7 +2497,7 @@ git commit -m "feat: add API routes, producer controls, and live event WebSocket
 - Test: `frontend/src/api/client.test.js`
 
 **Interfaces:**
-- Produces in `client.js`: `createShow(payload)`, `getShow(showId)`, `startRound(showId)`, `stopRound(showId)`, `pauseAgent(showId, agentId)`, `resumeAgent(showId, agentId)`, `killAgent(showId, agentId)`, `releaseEvent(showId, seq)`, and `openEventSocket(showId, onEvent) -> WebSocket`. All REST calls throw on non-2xx.
+- Produces in `client.js`: `createShow(payload)`, `getShow(showId)`, `startRound(showId)`, `stopRound(showId)`, `killAgent(showId, agentId)`, `releaseEvent(showId, seq)`, and `openEventSocket(showId, onEvent) -> WebSocket`. All REST calls throw on non-2xx.
 - Produces in `presets.js`: `PRESET_AGENTS` (8 `{id, name}` mirroring the backend pool), plus `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT`.
 - This is the only frontend module that calls `fetch` or constructs a `WebSocket`.
 
@@ -2456,8 +2553,7 @@ Create `frontend/src/api/client.test.js`:
 ```javascript
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  createShow, getShow, startRound, stopRound,
-  pauseAgent, resumeAgent, killAgent, releaseEvent,
+  createShow, getShow, startRound, stopRound, killAgent, releaseEvent,
 } from "./client";
 
 beforeEach(() => {
@@ -2503,16 +2599,13 @@ describe("api client", () => {
     );
   });
 
-  it("agent controls hit pause, resume, and kill routes", async () => {
-    global.fetch.mockReturnValue(ok({ status: "paused" }));
-    await pauseAgent("sheesha-ghar", "vikram");
-    await resumeAgent("sheesha-ghar", "vikram");
+  it("killAgent hits the kill route", async () => {
+    global.fetch.mockReturnValue(ok({ status: "eliminated" }));
     await killAgent("sheesha-ghar", "vikram");
-
-    const urls = global.fetch.mock.calls.map((call) => call[0]);
-    expect(urls[0]).toContain("/agents/vikram/pause");
-    expect(urls[1]).toContain("/agents/vikram/resume");
-    expect(urls[2]).toContain("/agents/vikram/kill");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/agents/vikram/kill"),
+      expect.objectContaining({ method: "POST" })
+    );
   });
 
   it("releaseEvent posts to the event release route", async () => {
@@ -2576,14 +2669,6 @@ export function startRound(showId) {
 
 export function stopRound(showId) {
   return post(`/shows/${showId}/stop`);
-}
-
-export function pauseAgent(showId, agentId) {
-  return post(`/shows/${showId}/agents/${agentId}/pause`);
-}
-
-export function resumeAgent(showId, agentId) {
-  return post(`/shows/${showId}/agents/${agentId}/resume`);
 }
 
 export function killAgent(showId, agentId) {
@@ -2859,7 +2944,7 @@ git commit -m "feat: add show setup screen with editable prompts and agent picke
 
 **Interfaces:**
 - Produces `EventFeed({ showId, events, narratives, onEventReleased })` — two tabs. "Live feed" shows **every** event including unreleased private ones and confessions, each labelled, with a Reveal button on unreleased private events calling `releaseEvent(showId, seq)`. "Story" shows the per-round narratives in round order.
-- Produces `LiveRoom({ show, onShowUpdated })` — roster with status and pause/resume/kill, plus Start round and Stop round buttons wired to `startRound`/`stopRound`.
+- Produces `LiveRoom({ show, onShowUpdated })` — roster with status and a kill control, plus Start round and Stop round buttons wired to `startRound`/`stopRound`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3051,7 +3136,7 @@ export default function EventFeed({ showId, events, narratives, onEventReleased 
 Create `frontend/src/components/LiveRoom.jsx`:
 
 ```javascript
-import { startRound, stopRound, pauseAgent, resumeAgent, killAgent } from "../api/client";
+import { startRound, stopRound, killAgent } from "../api/client";
 
 export default function LiveRoom({ show, onShowUpdated }) {
   async function handleStart() {
@@ -3062,8 +3147,8 @@ export default function LiveRoom({ show, onShowUpdated }) {
     onShowUpdated(await stopRound(show.id));
   }
 
-  async function handleAgentAction(action, agentId) {
-    onShowUpdated(await action(show.id, agentId));
+  async function handleKill(agentId) {
+    onShowUpdated(await killAgent(show.id, agentId));
   }
 
   return (
@@ -3077,20 +3162,8 @@ export default function LiveRoom({ show, onShowUpdated }) {
             <span>{agent.name}</span>
             <span>{agent.status}</span>
             <button
-              aria-label={`Pause ${agent.name}`}
-              onClick={() => handleAgentAction(pauseAgent, agent.id)}
-            >
-              Pause
-            </button>
-            <button
-              aria-label={`Resume ${agent.name}`}
-              onClick={() => handleAgentAction(resumeAgent, agent.id)}
-            >
-              Resume
-            </button>
-            <button
               aria-label={`Kill ${agent.name}`}
-              onClick={() => handleAgentAction(killAgent, agent.id)}
+              onClick={() => handleKill(agent.id)}
             >
               Kill
             </button>
