@@ -4,7 +4,7 @@ from app.api import create_app
 from app.models import RoundConfig
 from app.store import ShowStore
 
-FIVE = ["strategist", "diplomat", "loyalist", "operator", "wildcard"]
+FIVE = ["creditor", "wife", "lawyer", "brother", "househelp"]
 
 
 class TalkativeClient:
@@ -36,7 +36,7 @@ def create_show(client, **overrides):
 
 def test_create_show_requires_exactly_five_agents(tmp_path):
     client, _ = make_client(tmp_path)
-    response = create_show(client, agent_preset_ids=["strategist"])
+    response = create_show(client, agent_preset_ids=["creditor"])
     assert response.status_code == 400
 
 
@@ -50,14 +50,16 @@ def test_create_show_returns_running_show_with_five_contestants(tmp_path):
 def test_secret_connections_are_applied_symmetrically(tmp_path):
     client, _ = make_client(tmp_path)
     data = create_show(client, secret_connections=[
-        {"agent_a": "strategist", "agent_b": "diplomat",
-         "connection_note": "Former business partners."},
+        {"agent_a": "creditor", "agent_b": "lawyer",
+         "connection_note": "Shared a quiet deal about Ramesh's debt papers."},
     ]).json()
 
     contestants = {c["id"]: c for c in data["contestants"]}
-    assert contestants["strategist"]["connected_to"] == "diplomat"
-    assert contestants["diplomat"]["connected_to"] == "strategist"
-    assert contestants["diplomat"]["connection_note"] == "Former business partners."
+    assert contestants["creditor"]["connected_to"] == "lawyer"
+    assert contestants["lawyer"]["connected_to"] == "creditor"
+    assert contestants["lawyer"]["connection_note"] == (
+        "Shared a quiet deal about Ramesh's debt papers."
+    )
 
 
 def test_run_round_returns_narrative(tmp_path):
@@ -83,7 +85,7 @@ def test_kill_agent(tmp_path):
     client, _ = make_client(tmp_path)
     show_id = create_show(client).json()["id"]
 
-    response = client.post(f"/shows/{show_id}/agents/strategist/kill")
+    response = client.post(f"/shows/{show_id}/agents/creditor/kill")
 
     assert response.json()["status"] == "eliminated"
 
