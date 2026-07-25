@@ -1,6 +1,8 @@
 import asyncio
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .event_bus import EventBus
@@ -16,13 +18,19 @@ class CreateShowRequest(BaseModel):
     show_prompt: str = DEFAULT_SHOW_PROMPT
     gm_prompt: str = DEFAULT_GM_PROMPT
     rules_text: str = DEFAULT_RULES_TEXT
-    max_rounds: int = None
+    max_rounds: Optional[int] = None
     secret_connections: list = []
     agent_preset_ids: list
 
 
 def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
     app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     config = config or RoundConfig()
     buses = {}
     sockets = {}
