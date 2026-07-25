@@ -1,5 +1,6 @@
 import asyncio
 
+from .event_bus import perform_leak
 from .models import AgentStatus, EventKind, Visibility
 from .tools import AGENT_TOOLS
 
@@ -44,14 +45,16 @@ def _format_event(event, agent) -> str:
         return f"[GAME MASTER RULING] {event.text}"
     if event.kind == EventKind.GM_ANNOUNCEMENT:
         return f"[GAME MASTER] {event.text}"
+    if event.kind == EventKind.LEAK:
+        return f"[LEAKED] {event.text}"
     if event.kind == EventKind.CONFESSION:
-        return f"[your own private thought] {event.text}"
+        return f"[seq {event.seq}, your own private thought] {event.text}"
     if event.sender_id == agent.id:
         if event.visibility == Visibility.PRIVATE and not event.released:
-            return f"[you, privately to {event.recipients}] {event.text}"
+            return f"[seq {event.seq}, you, privately to {event.recipients}] {event.text}"
         return f"[you] {event.text}"
     if event.visibility == Visibility.PRIVATE and not event.released:
-        return f"[PRIVATE from {event.sender_id}] {event.text}"
+        return f"[seq {event.seq}, PRIVATE from {event.sender_id}] {event.text}"
     return f"{event.sender_id}: {event.text}"
 
 
@@ -69,10 +72,25 @@ def dispatch_agent_calls(bus, agent, calls) -> int:
         elif name == "confess":
             bus.publish(agent.id, arguments["text"], kind=EventKind.CONFESSION,
                         visibility=Visibility.PRIVATE, recipients=[])
+        elif name == "leak_message":
+            target = _find_event(bus.show, arguments.get("event_seq"))
+            if target is None or not bus.can_see(target, agent.id):
+                continue
+            try:
+                perform_leak(bus, target, agent.id)
+            except ValueError:
+                continue
         else:
             continue
         published += 1
     return published
+
+
+def _find_event(show, seq):
+    for event in show.events:
+        if event.seq == seq:
+            return event
+    return None
 
 
 def _drain(inbox) -> list:

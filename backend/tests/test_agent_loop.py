@@ -215,6 +215,84 @@ async def test_run_agent_loop_tracks_in_flight_during_the_call():
     assert bus.in_flight == 0
 
 
+def test_format_event_prefixes_leakable_lines_with_seq():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+    bus.publish("meera", "Not for Vikram.", visibility=Visibility.PRIVATE,
+                recipients=["karan"])
+    bus.publish("vikram", "I am bluffing.", kind=EventKind.CONFESSION,
+                visibility=Visibility.PRIVATE, recipients=[])
+    bus.publish("meera", "Ally?", visibility=Visibility.PRIVATE, recipients=["vikram"])
+
+    _, user_prompt = build_agent_prompt(show, vikram, bus, fast_config())
+
+    assert "[seq 1, your own private thought]" in user_prompt
+    assert "[seq 2, PRIVATE from meera]" in user_prompt
+
+
+def test_dispatch_leak_message_reveals_a_witnessed_private_message():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+    original = bus.publish("meera", "Ally?", visibility=Visibility.PRIVATE,
+                            recipients=["vikram"])
+
+    published = dispatch_agent_calls(bus, vikram, [
+        {"name": "leak_message", "arguments": {"event_seq": original.seq}},
+    ])
+
+    assert published == 1
+    assert original.released is True
+    leak_events = [e for e in show.events if e.kind == EventKind.LEAK]
+    assert len(leak_events) == 1
+    assert leak_events[0].sender_id == "vikram"
+    assert "Meera" in leak_events[0].text
+
+
+def test_dispatch_leak_message_ignores_an_event_never_witnessed():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+    original = bus.publish("meera", "Not for Vikram.", visibility=Visibility.PRIVATE,
+                            recipients=["karan"])
+
+    published = dispatch_agent_calls(bus, vikram, [
+        {"name": "leak_message", "arguments": {"event_seq": original.seq}},
+    ])
+
+    assert published == 0
+    assert original.released is False
+    assert [e for e in show.events if e.kind == EventKind.LEAK] == []
+
+
+def test_dispatch_leak_message_ignores_an_already_leaked_event():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+    original = bus.publish("vikram", "Ally?", visibility=Visibility.PRIVATE,
+                            recipients=["meera"])
+    original.released = True
+
+    published = dispatch_agent_calls(bus, vikram, [
+        {"name": "leak_message", "arguments": {"event_seq": original.seq}},
+    ])
+
+    assert published == 0
+
+
+def test_dispatch_leak_message_ignores_an_unknown_seq():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+
+    published = dispatch_agent_calls(bus, vikram, [
+        {"name": "leak_message", "arguments": {"event_seq": 999}},
+    ])
+
+    assert published == 0
+
+
 @pytest.mark.asyncio
 async def test_run_agent_loop_exits_when_eliminated_mid_round():
     show = make_show()
