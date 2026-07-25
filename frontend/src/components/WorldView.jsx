@@ -487,7 +487,12 @@ export default function WorldView({ showId, characters, onDialogueBusyChange }) 
 
         socket = openEventSocket(showId, (event) => {
           if (engine) engine.handleEvent(event);
-          setChatLog((prev) => [...prev, event]);
+          setChatLog((prev) => {
+            const next = event.leaked_from_seq != null
+              ? prev.map((e) => (e.seq === event.leaked_from_seq ? { ...e, released: true } : e))
+              : prev;
+            return [...next, event];
+          });
         });
       } catch (error) {
         if (!cancelled) setLoadError(error.message);

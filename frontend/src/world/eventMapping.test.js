@@ -38,6 +38,18 @@ describe("mapEvent", () => {
     });
   });
 
+  it("maps a leak event to a sender-attributed leak bubble", () => {
+    const event = baseEvent({
+      kind: "leak", sender_id: "game_master", text: 'It has been leaked that Vikram said "Ally?" to Meera.',
+    });
+    expect(mapEvent(event)).toEqual({
+      id: 5,
+      kind: "leak",
+      senderId: "game_master",
+      text: 'It has been leaked that Vikram said "Ally?" to Meera.',
+    });
+  });
+
   it("returns null for narration", () => {
     expect(mapEvent(baseEvent({ kind: "narration" }))).toBeNull();
   });

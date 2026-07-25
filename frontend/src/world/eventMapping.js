@@ -25,5 +25,11 @@ export function mapEvent(event) {
     return { id: event.seq, kind: "gm", text: event.text };
   }
 
+  if (event.kind === "leak") {
+    return {
+      id: event.seq, kind: "leak", senderId: event.sender_id, text: event.text,
+    };
+  }
+
   return null;
 }

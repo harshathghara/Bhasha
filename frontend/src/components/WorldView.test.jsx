@@ -363,6 +363,38 @@ describe("WorldView", () => {
     expect(screen.queryByTestId("leak-button-seq-2")).not.toBeInTheDocument();
   });
 
+  it("reconciles an agent-driven leak delivered purely over the socket", async () => {
+    const cast = [{ id: "creditor", name: "Vikram", spriteKey: "slot-1", tileX: 1, tileY: 1 }];
+    render(<WorldView showId="s1" characters={cast} />);
+    await waitFor(() => expect(WorldEngine).toHaveBeenCalledTimes(1));
+    const onEvent = openEventSocket.mock.calls[0][1];
+
+    act(() => {
+      onEvent({
+        seq: 2, sender_id: "creditor", kind: "agent_action",
+        visibility: "private", recipients: ["creditor"], text: "Private.", released: false,
+      });
+    });
+
+    expect(screen.getByTestId("leak-button-seq-2")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-leaked-badge-seq-2")).not.toBeInTheDocument();
+
+    // Simulate the backend's LEAK event arriving over the socket, as it would
+    // when an agent's own tool call leaked the message (no button click, no
+    // HTTP response involved).
+    act(() => {
+      onEvent({
+        seq: 3, sender_id: "vikram", kind: "leak",
+        visibility: "public", recipients: [], text: "It has been leaked...",
+        leaked_from_seq: 2,
+      });
+    });
+
+    expect(leakEvent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("leak-button-seq-2")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-leaked-badge-seq-2")).toBeInTheDocument();
+  });
+
   it("shows an inline error when leaking fails", async () => {
     const cast = [{ id: "creditor", name: "Vikram", spriteKey: "slot-1", tileX: 1, tileY: 1 }];
     leakEvent.mockRejectedValue(new Error("Event has already been leaked"));
