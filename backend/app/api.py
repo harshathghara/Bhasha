@@ -119,7 +119,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         stop_event = asyncio.Event()
         stop_events[show_id] = stop_event
         try:
-            narrative = await run_round(
+            recap, narrative = await run_round(
                 show, bus_for(show), llm_client, config, store, stop_event,
                 opening_brief=req.opening_brief,
             )
@@ -128,7 +128,11 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
-        return {"round": show.current_round, "narrative": narrative}
+        return {
+            "round": show.current_round,
+            "recap": recap,
+            "narrative": narrative,
+        }
 
     @app.post("/shows/{show_id}/stop")
     def stop_round(show_id: str):

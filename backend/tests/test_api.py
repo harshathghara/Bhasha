@@ -71,14 +71,21 @@ def test_secret_connections_are_applied_symmetrically(tmp_path):
     )
 
 
-def test_run_round_returns_narrative(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_run_round_returns_recap_and_narrative(tmp_path):
+    client, store = make_client(tmp_path)
     show_id = create_show(client).json()["id"]
 
     response = client.post(f"/shows/{show_id}/rounds")
 
     assert response.status_code == 200
-    assert response.json() == {"round": 1, "narrative": "A lively round."}
+    assert response.json() == {
+        "round": 1,
+        "recap": "A lively round.",
+        "narrative": "A lively round.",
+    }
+    show = store.get(show_id)
+    assert show.recaps[1] == "A lively round."
+    assert show.narratives[1] == "A lively round."
 
 
 def test_start_round_with_opening_brief_publishes_after_kickoff(tmp_path):
@@ -115,8 +122,10 @@ def test_two_rounds_accumulate_narratives_and_brief_on_round_two(tmp_path):
     show = store.get(show_id)
     assert show.current_round == 2
     assert set(show.narratives) == {1, 2}
+    assert set(show.recaps) == {1, 2}
     assert show.narratives[1] == "A lively round."
     assert show.narratives[2] == "A lively round."
+    assert show.recaps[2] == "A lively round."
 
     round_two = show.events_for_round(2)
     assert round_two[0].kind.value == "gm_announcement"
