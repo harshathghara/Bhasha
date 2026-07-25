@@ -41,12 +41,20 @@ export function stopRound(showId) {
   return post(`/shows/${showId}/stop`);
 }
 
+export function endShow(showId) {
+  return post(`/shows/${showId}/end`);
+}
+
 export function killAgent(showId, agentId) {
   return post(`/shows/${showId}/agents/${agentId}/kill`);
 }
 
 export function releaseEvent(showId, seq) {
   return post(`/shows/${showId}/events/${seq}/release`);
+}
+
+export function leakEvent(showId, seq) {
+  return post(`/shows/${showId}/events/${seq}/leak`);
 }
 
 export function openEventSocket(showId, onEvent) {

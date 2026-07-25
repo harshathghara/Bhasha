@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  createShow, getShow, startRound, stopRound, killAgent, releaseEvent,
+  createShow, getShow, startRound, stopRound, endShow, killAgent, releaseEvent, leakEvent,
 } from "./client";
 
 beforeEach(() => {
@@ -30,7 +30,7 @@ describe("api client", () => {
     );
   });
 
-  it("startRound and stopRound hit their routes", async () => {
+  it("startRound, stopRound, and endShow hit their routes", async () => {
     global.fetch.mockReturnValue(ok({ round: 1, narrative: "x" }));
     await startRound("sheesha-ghar");
     expect(global.fetch).toHaveBeenCalledWith(
@@ -42,6 +42,13 @@ describe("api client", () => {
     await stopRound("sheesha-ghar");
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("/shows/sheesha-ghar/stop"),
+      expect.objectContaining({ method: "POST" })
+    );
+
+    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar", status: "ended" }));
+    await endShow("sheesha-ghar");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/end"),
       expect.objectContaining({ method: "POST" })
     );
   });
@@ -60,6 +67,16 @@ describe("api client", () => {
     const result = await releaseEvent("sheesha-ghar", 3);
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("/shows/sheesha-ghar/events/3/release"),
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(result.released).toBe(true);
+  });
+
+  it("leakEvent posts to the event leak route", async () => {
+    global.fetch.mockReturnValue(ok({ seq: 3, released: true }));
+    const result = await leakEvent("sheesha-ghar", 3);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/events/3/leak"),
       expect.objectContaining({ method: "POST" })
     );
     expect(result.released).toBe(true);
