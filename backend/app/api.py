@@ -3,10 +3,11 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .event_bus import EventBus
-from .models import AgentStatus, RoundConfig, Show, ShowStatus
+from .event_bus import EventBus, perform_leak
+from .models import AgentStatus, GM_ID, RoundConfig, Show, ShowStatus
 from .presets import (
     DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, DEFAULT_SHOW_PROMPT, build_preset_agent,
 )
@@ -31,6 +32,15 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(KeyError)
+    async def keyerror_exception_handler(request, exc):
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(ValueError)
+    async def valueerror_exception_handler(request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     config = config or RoundConfig()
     buses = {}
     sockets = {}
@@ -110,6 +120,15 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         stop_event.set()
         return {"stopped": True}
 
+    @app.post("/shows/{show_id}/end")
+    def end_show(show_id: str):
+        show = store.get(show_id)
+        show.status = ShowStatus.ENDED
+        stop_event = stop_events.get(show_id)
+        if stop_event is not None:
+            stop_event.set()
+        return show.to_dict()
+
     @app.post("/shows/{show_id}/agents/{agent_id}/kill")
     def kill_agent(show_id: str, agent_id: str):
         agent = store.get(show_id).get_agent(agent_id)
@@ -123,6 +142,16 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
             if event.seq == seq:
                 event.released = True
                 return event.to_dict()
+        raise HTTPException(404, "No event with that seq")
+
+    @app.post("/shows/{show_id}/events/{seq}/leak")
+    def leak_event(show_id: str, seq: int):
+        show = store.get(show_id)
+        bus = bus_for(show)
+        for event in show.events:
+            if event.seq == seq:
+                updated, _ = perform_leak(bus, event, GM_ID)
+                return updated.to_dict()
         raise HTTPException(404, "No event with that seq")
 
     @app.websocket("/ws/{show_id}")

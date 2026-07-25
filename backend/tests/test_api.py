@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.api import create_app
-from app.models import RoundConfig
+from app.models import Event, EventKind, RoundConfig, Visibility
 from app.store import ShowStore
 
 FIVE = ["creditor", "wife", "lawyer", "brother", "househelp"]
@@ -79,6 +79,17 @@ def test_round_limit_is_enforced(tmp_path):
     assert client.get(f"/shows/{show_id}").json()["status"] == "ended"
 
 
+def test_end_show_marks_status_ended(tmp_path):
+    client, _ = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+
+    response = client.post(f"/shows/{show_id}/end")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ended"
+    assert client.get(f"/shows/{show_id}").json()["status"] == "ended"
+
+
 def test_kill_agent(tmp_path):
     client, _ = make_client(tmp_path)
     show_id = create_show(client).json()["id"]
@@ -104,6 +115,53 @@ def test_release_missing_event_returns_404(tmp_path):
     client, _ = make_client(tmp_path)
     show_id = create_show(client).json()["id"]
     assert client.post(f"/shows/{show_id}/events/999/release").status_code == 404
+
+
+def test_leak_event_reveals_a_private_message(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    show = store.get(show_id)
+    show.events.append(Event(
+        seq=0, round=1, sender_id="creditor", text="Ally with me.",
+        visibility=Visibility.PRIVATE, recipients=["wife"],
+    ))
+
+    response = client.post(f"/shows/{show_id}/events/0/leak")
+
+    assert response.status_code == 200
+    assert response.json()["released"] is True
+    leak_events = [e for e in show.events if e.kind == EventKind.LEAK]
+    assert len(leak_events) == 1
+    assert leak_events[0].sender_id == "game_master"
+    assert "leaked" in leak_events[0].text.lower()
+
+
+def test_leak_missing_event_returns_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    assert client.post(f"/shows/{show_id}/events/999/leak").status_code == 404
+
+
+def test_leak_public_event_returns_409(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    show = store.get(show_id)
+    show.events.append(Event(seq=0, round=1, sender_id="creditor", text="Hello house."))
+
+    assert client.post(f"/shows/{show_id}/events/0/leak").status_code == 409
+
+
+def test_leak_already_leaked_event_returns_409(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    show = store.get(show_id)
+    show.events.append(Event(
+        seq=0, round=1, sender_id="creditor", text="Ally with me.",
+        visibility=Visibility.PRIVATE, recipients=["wife"],
+    ))
+    client.post(f"/shows/{show_id}/events/0/leak")
+
+    assert client.post(f"/shows/{show_id}/events/0/leak").status_code == 409
 
 
 def test_websocket_streams_events_during_a_round(tmp_path):
