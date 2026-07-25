@@ -72,3 +72,31 @@ class EventBus:
         if subscriber_id == event.sender_id:
             return False
         return self.can_see(event, subscriber_id)
+
+
+def perform_leak(bus: "EventBus", event: Event, leaking_sender_id: str) -> tuple:
+    """Reveal a private message or confession as a new public LEAK event.
+    Marks the original event released so agent context and the narrator
+    treat it as common knowledge from now on."""
+    leakable = (
+        (event.kind == EventKind.AGENT_ACTION and event.visibility == Visibility.PRIVATE)
+        or event.kind == EventKind.CONFESSION
+    )
+    if not leakable:
+        raise ValueError(f"Event {event.seq} is not leakable (kind={event.kind.value})")
+    if event.released:
+        raise ValueError(f"Event {event.seq} has already been leaked")
+
+    sender_name = bus.show.get_agent(event.sender_id).name
+    if event.kind == EventKind.CONFESSION:
+        text = f'It has been leaked that {sender_name} confessed: "{event.text}"'
+    else:
+        recipient_name = bus.show.get_agent(event.recipients[0]).name
+        text = f'It has been leaked that {sender_name} said "{event.text}" to {recipient_name}.'
+
+    event.released = True
+    leak_event = bus.publish(
+        leaking_sender_id, text, kind=EventKind.LEAK, visibility=Visibility.PUBLIC,
+    )
+    leak_event.leaked_from_seq = event.seq
+    return event, leak_event

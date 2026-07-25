@@ -1,11 +1,20 @@
 import pytest
 
-from app.event_bus import EventBus
-from app.models import EventKind, Show, Visibility, GM_ID
+from app.event_bus import EventBus, perform_leak
+from app.models import Agent, EventKind, Show, Visibility, GM_ID
 
 
 def make_show():
     return Show(id="s1", title="T", show_prompt="p", gm_prompt="g", rules_text="r")
+
+
+def make_show_with_agents():
+    agents = [
+        Agent(id="vikram", name="Vikram", personality_prompt="p"),
+        Agent(id="meera", name="Meera", personality_prompt="p"),
+    ]
+    return Show(id="s1", title="T", show_prompt="p", gm_prompt="g",
+                rules_text="r", contestants=agents)
 
 
 @pytest.mark.asyncio
@@ -147,3 +156,56 @@ async def test_all_inboxes_empty_reflects_queue_state():
     assert bus.all_inboxes_empty() is False
     meera.get_nowait()
     assert bus.all_inboxes_empty() is True
+
+
+@pytest.mark.asyncio
+async def test_perform_leak_reveals_a_private_message_gm_attributed():
+    show = make_show_with_agents()
+    bus = EventBus(show)
+    original = bus.publish("vikram", "Ally with me.", visibility=Visibility.PRIVATE,
+                            recipients=["meera"])
+
+    updated, leak_event = perform_leak(bus, original, GM_ID)
+
+    assert updated.released is True
+    assert leak_event.kind == EventKind.LEAK
+    assert leak_event.visibility == Visibility.PUBLIC
+    assert leak_event.sender_id == GM_ID
+    assert leak_event.leaked_from_seq == original.seq
+    assert leak_event.text == 'It has been leaked that Vikram said "Ally with me." to Meera.'
+
+
+@pytest.mark.asyncio
+async def test_perform_leak_reveals_a_confession_self_attributed():
+    show = make_show_with_agents()
+    bus = EventBus(show)
+    original = bus.publish("vikram", "I am bluffing.", kind=EventKind.CONFESSION,
+                            visibility=Visibility.PRIVATE, recipients=[])
+
+    updated, leak_event = perform_leak(bus, original, "vikram")
+
+    assert updated.released is True
+    assert leak_event.sender_id == "vikram"
+    assert leak_event.text == 'It has been leaked that Vikram confessed: "I am bluffing."'
+
+
+@pytest.mark.asyncio
+async def test_perform_leak_rejects_an_already_leaked_event():
+    show = make_show_with_agents()
+    bus = EventBus(show)
+    original = bus.publish("vikram", "Ally with me.", visibility=Visibility.PRIVATE,
+                            recipients=["meera"])
+    perform_leak(bus, original, GM_ID)
+
+    with pytest.raises(ValueError):
+        perform_leak(bus, original, GM_ID)
+
+
+@pytest.mark.asyncio
+async def test_perform_leak_rejects_a_public_event():
+    show = make_show_with_agents()
+    bus = EventBus(show)
+    original = bus.publish("vikram", "Hello house.")
+
+    with pytest.raises(ValueError):
+        perform_leak(bus, original, GM_ID)
