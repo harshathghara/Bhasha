@@ -12,8 +12,10 @@ describe("RoundEndModal", () => {
         storyOpen={false}
         showOver={false}
         starting={false}
+        ending={false}
         onStartNext={() => {}}
         onToggleStory={() => {}}
+        onEndGame={() => {}}
       />,
     );
 
@@ -23,6 +25,7 @@ describe("RoundEndModal", () => {
     );
     expect(screen.getByRole("button", { name: /start next round/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /story so far/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /end game/i })).toBeEnabled();
   });
 
   it("shows story chapters when storyOpen is true", () => {
@@ -34,8 +37,10 @@ describe("RoundEndModal", () => {
         storyOpen
         showOver={false}
         starting={false}
+        ending={false}
         onStartNext={() => {}}
         onToggleStory={() => {}}
+        onEndGame={() => {}}
       />,
     );
 
@@ -46,9 +51,10 @@ describe("RoundEndModal", () => {
     expect(story).toHaveTextContent("Chapter two.");
   });
 
-  it("fires callbacks for next round and story toggle", () => {
+  it("fires callbacks for next round, story toggle, and end game", () => {
     const onStartNext = vi.fn();
     const onToggleStory = vi.fn();
+    const onEndGame = vi.fn();
     render(
       <RoundEndModal
         round={1}
@@ -57,15 +63,39 @@ describe("RoundEndModal", () => {
         storyOpen={false}
         showOver={false}
         starting={false}
+        ending={false}
         onStartNext={onStartNext}
         onToggleStory={onToggleStory}
+        onEndGame={onEndGame}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /start next round/i }));
     fireEvent.click(screen.getByRole("button", { name: /story so far/i }));
+    fireEvent.click(screen.getByRole("button", { name: /end game/i }));
 
     expect(onStartNext).toHaveBeenCalledTimes(1);
     expect(onToggleStory).toHaveBeenCalledTimes(1);
+    expect(onEndGame).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides end game when the show is already over", () => {
+    render(
+      <RoundEndModal
+        round={3}
+        recap="Final."
+        narratives={{ 3: "Final." }}
+        storyOpen={false}
+        showOver
+        starting={false}
+        ending={false}
+        onStartNext={() => {}}
+        onToggleStory={() => {}}
+        onEndGame={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /end game/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show over/i })).toBeDisabled();
   });
 });

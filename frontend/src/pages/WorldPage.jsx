@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import WorldView from "../components/WorldView";
 import RoundEndModal from "../components/RoundEndModal";
-import { getShow, startRound } from "../api/client";
+import { getShow, startRound, endShow } from "../api/client";
 
 const SPAWN_POSITIONS = [
   { tileX: 3, tileY: 3 },
@@ -24,8 +24,22 @@ function isRoundLimitError(error) {
   return /round limit/i.test(error?.message || "");
 }
 
-export default function WorldPage({ show }) {
+const startRoundButtonStyle = {
+  position: "absolute",
+  top: 12,
+  left: 12,
+  zIndex: 2,
+  border: "1px solid #3a3a44",
+  borderRadius: "6px",
+  background: "#2a2a32",
+  color: "#e8e8ec",
+  padding: "9px 12px",
+  fontWeight: 700,
+};
+
+export default function WorldPage({ show, onEndGame = () => {} }) {
   const [starting, setStarting] = useState(false);
+  const [ending, setEnding] = useState(false);
   const [roundActive, setRoundActive] = useState(false);
   const [endedRound, setEndedRound] = useState(null);
   const [narratives, setNarratives] = useState(() => ({ ...(show.narratives || {}) }));
@@ -94,13 +108,26 @@ export default function WorldPage({ show }) {
     }
   }
 
+  async function handleEndGame() {
+    setEnding(true);
+    setStartError(null);
+    try {
+      await endShow(show.id);
+      onEndGame();
+    } catch (error) {
+      setStartError(error.message || "Failed to end game");
+    } finally {
+      setEnding(false);
+    }
+  }
+
   return (
     <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
       {!roundActive && !modalOpen && (
         <button
           onClick={runRound}
           disabled={starting || showOver}
-          style={{ position: "absolute", top: 12, left: 12, zIndex: 2 }}
+          style={{ ...startRoundButtonStyle, opacity: starting || showOver ? 0.6 : 1 }}
         >
           {showOver ? "Show over" : "Start round"}
         </button>
@@ -113,9 +140,10 @@ export default function WorldPage({ show }) {
             top: 48,
             left: 12,
             zIndex: 2,
-            color: "#ff6b6b",
+            color: "#8c4456",
             maxWidth: 320,
-            background: "rgba(0,0,0,0.7)",
+            background: "#fff2f5",
+            border: "1px solid #e5b7c4",
             padding: "8px 10px",
             margin: 0,
           }}
@@ -136,8 +164,10 @@ export default function WorldPage({ show }) {
           storyOpen={storyOpen}
           showOver={showOver}
           starting={starting}
+          ending={ending}
           onStartNext={runRound}
           onToggleStory={handleToggleStory}
+          onEndGame={handleEndGame}
         />
       )}
     </div>

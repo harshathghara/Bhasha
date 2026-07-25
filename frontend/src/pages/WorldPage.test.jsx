@@ -149,4 +149,25 @@ describe("WorldPage", () => {
 
     expect(screen.getByRole("button", { name: /show over/i })).toBeDisabled();
   });
+
+  it("ends the game from the modal and delegates resetting the app", async () => {
+    vi.spyOn(api, "startRound").mockResolvedValue({
+      round: 1,
+      narrative: "Recap one.",
+    });
+    const endSpy = vi.spyOn(api, "endShow").mockResolvedValue({
+      ...show,
+      status: "ended",
+    });
+    const onEndGame = vi.fn();
+    render(<WorldPage show={show} onEndGame={onEndGame} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /start round/i }));
+    await screen.findByTestId("round-end-modal");
+
+    fireEvent.click(screen.getByRole("button", { name: /end game/i }));
+
+    await waitFor(() => expect(endSpy).toHaveBeenCalledWith("sheesha-ghar"));
+    expect(onEndGame).toHaveBeenCalledTimes(1);
+  });
 });

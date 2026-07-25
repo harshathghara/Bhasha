@@ -5,7 +5,11 @@ import WorldPage from "./pages/WorldPage";
 import * as api from "./api/client";
 
 vi.mock("./pages/WorldPage", () => ({
-  default: vi.fn(() => <div data-testid="world-page-stub" />),
+  default: vi.fn(({ onEndGame }) => (
+    <button type="button" data-testid="world-page-stub" onClick={onEndGame}>
+      End game
+    </button>
+  )),
 }));
 
 describe("App", () => {
@@ -29,5 +33,27 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByTestId("world-page-stub")).toBeInTheDocument());
     const props = WorldPage.mock.calls[WorldPage.mock.calls.length - 1][0];
     expect(props.show.id).toBe("sheesha-ghar");
+  });
+
+  it("returns to a fresh show setup after the game ends", async () => {
+    vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar", contestants: [] });
+    render(<App />);
+
+    const names = [
+      "Vikram Sethi — The Creditor",
+      "Priya Malhotra — The Wife",
+      "Arjun Mehta — The Lawyer",
+      "Karan Malhotra — The Brother",
+      "Meena Devi — The Househelp",
+    ];
+    names.forEach((name) => fireEvent.click(screen.getByLabelText(name)));
+    fireEvent.click(screen.getByRole("button", { name: /start show/i }));
+
+    await screen.findByTestId("world-page-stub");
+    fireEvent.click(screen.getByRole("button", { name: /end game/i }));
+
+    expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start show/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("Show title")).toHaveValue("Sheesha Ghar");
   });
 });

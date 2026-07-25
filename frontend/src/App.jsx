@@ -9,5 +9,5 @@ export default function App() {
     return <ShowSetup onCreated={setShow} />;
   }
 
-  return <WorldPage show={show} />;
+  return <WorldPage show={show} onEndGame={() => setShow(null)} />;
 }

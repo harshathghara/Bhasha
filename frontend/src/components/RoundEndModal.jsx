@@ -11,7 +11,7 @@ const overlayStyle = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(10, 10, 14, 0.72)",
+  background: "rgba(112, 87, 122, 0.28)",
   zIndex: 3,
   padding: "24px",
   boxSizing: "border-box",
@@ -90,7 +90,9 @@ const buttonStyle = {
   fontSize: "8px",
   lineHeight: 1.4,
   padding: "10px 12px",
-  border: "2px solid #111111",
+  borderWidth: "2px",
+  borderStyle: "solid",
+  borderColor: "#111111",
   borderRadius: "4px",
   background: "#c8c0a8",
   color: "#111111",
@@ -117,8 +119,10 @@ export default function RoundEndModal({
   storyOpen,
   showOver,
   starting,
+  ending,
   onStartNext,
   onToggleStory,
+  onEndGame,
 }) {
   const rounds = Object.keys(narratives || {})
     .map(Number)
@@ -138,7 +142,7 @@ export default function RoundEndModal({
         {storyOpen && (
           <div style={storyPanelStyle} data-testid="story-so-far">
             {rounds.length === 0 ? (
-              <p style={{ margin: 0, color: "#8a8a96", fontSize: "13px" }}>
+              <p style={{ margin: 0, color: "#8c7f93", fontSize: "13px" }}>
                 No story chapters yet.
               </p>
             ) : (
@@ -168,6 +172,16 @@ export default function RoundEndModal({
           >
             {storyOpen ? "Hide story" : "Story so far"}
           </button>
+          {!showOver && (
+            <button
+              type="button"
+              onClick={onEndGame}
+              disabled={starting || ending}
+              style={starting || ending ? disabledButtonStyle : secondaryButtonStyle}
+            >
+              {ending ? "Ending…" : "End game"}
+            </button>
+          )}
         </div>
       </div>
     </div>
