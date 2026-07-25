@@ -2,20 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the runnable harness for Sheesha Ghar — an AI reality show where 5 LLM-driven agents interact in parallel rounds inside a house, moderated by a Game Master agent, with all prompts (show, agents, GM) swappable behind shipped defaults.
+**Goal:** Build the harness for Sheesha Ghar — an AI reality show where 5 LLM-driven agents run as concurrent tasks messaging each other publicly and privately through an event bus, moderated live by a Game Master agent, with all prompts swappable behind shipped defaults.
 
-**Architecture:** Single-process FastAPI backend holding show state in memory, with a round orchestrator that runs each active agent's OpenAI call in parallel, then a GM review call, then a narrator call, snapshotting to JSON after each round. A React (Vite) frontend drives show setup and the live round view via REST.
+**Architecture:** Single-process FastAPI backend, state in memory, snapshotted to JSON per round. Each agent is an `asyncio.Task` with an inbox queue; an event bus fans public events to everyone and private events to recipients. A supervisor starts a round, and an end watcher stops it on budget exhaustion, quiescence, timeout, GM decision, or producer stop. A WebSocket streams every event to a React frontend live.
 
-**Tech Stack:** Python 3.11+, FastAPI, OpenAI Python SDK, pytest + pytest-asyncio + httpx (backend tests), React 18 + Vite, Vitest + @testing-library/react (frontend tests).
+**Tech Stack:** Python 3.11+, FastAPI, OpenAI Python SDK (tool calling), pytest + pytest-asyncio + httpx, React 18 + Vite, Vitest + @testing-library/react.
 
 ## Global Constraints
 
-- No database — state lives in memory; a JSON snapshot is written after every round as the only persistence (per spec §3, §10).
-- No auth, no multi-show history UI, no deployment concerns — local run only, per spec §12.
-- Every show/agent/GM prompt used anywhere in the pipeline must come from a `Show`/`Agent` field or a value in `presets.py`/frontend `presets.js` — never a string literal embedded elsewhere (per spec §2, the whole point is these are producer-editable).
-- A show is created with exactly 5 agents, chosen from the preset pool (per spec §9 screen 1, original brief 1.b).
-- Viewer-facing feeds (Live Round Feed / Full Story) are never filtered by visibility; only the per-agent LLM context is filtered (per spec §6). Any code that builds an agent's LLM prompt must apply the visibility filter; any code that builds a viewer/story payload must not.
-- Agent turns run concurrently, each built only from state as of the start of the round (per spec §5) — no agent's turn may read another agent's same-round output.
+- No database. State lives in memory; a JSON snapshot per round is the only persistence.
+- No auth, no multi-show history, no deployment concerns. Local run only.
+- Every show/agent/GM prompt must come from a `Show`/`Agent` field or `presets.py` — never a string literal buried in a runner.
+- A show is created with exactly 5 agents chosen from the preset pool.
+- **Visibility is enforced at exactly one place: `EventBus._is_visible_to`.** Agent inboxes are filtered there. Viewer/WebSocket payloads are never filtered — viewers see every event including unreleased private ones.
+- **Quiescence requires all three:** no new events for `quiescence_seconds`, `bus.in_flight == 0`, and every inbox empty. Never use elapsed-time-alone.
+- Tests must never make real network calls. Every test injects a fake LLM client and a `RoundConfig` with zeroed debounce/cooldown so suites run fast.
 
 ---
 
@@ -24,40 +25,27 @@
 ```
 backend/
   app/
-    models.py            # Agent, Message, RoundLog, Show + enums
-    presets.py            # default show/GM prompts, preset agent personalities
-    llm_client.py          # OpenAILLMClient + LLMClient protocol
-    agent_runner.py       # per-agent context build + turn execution
-    gm_runner.py           # GM context build + rule review + status changes
-    narrator_runner.py     # narrator context build + recap generation
-    orchestrator.py       # advance_round(): ties runners together per round
-    store.py              # ShowStore: in-memory registry + JSON snapshot
-    ws.py                  # ConnectionManager for WebSocket broadcast
-    api.py                 # FastAPI routes + app factory
-    main.py                # process entrypoint (uvicorn)
-  tests/
-    test_models.py
-    test_presets.py
-    test_llm_client.py
-    test_agent_runner.py
-    test_gm_runner.py
-    test_narrator_runner.py
-    test_store.py
-    test_orchestrator.py
-    test_api.py
-    test_ws.py
+    models.py          # Event, Agent, Show, RoundConfig + enums
+    presets.py          # default show/GM prompts, preset personalities
+    llm_client.py        # OpenAILLMClient: complete() + complete_with_tools()
+    event_bus.py         # EventBus: log, fan-out, inboxes, in_flight counter
+    tools.py             # AGENT_TOOLS / GM_TOOLS OpenAI tool schemas
+    agent_loop.py        # run_agent_loop(): debounce, drain, think, dispatch
+    gm_loop.py           # run_gm_loop(): live subscriber, warn/eject/announce/end
+    narrator.py          # run_narrator(): one recap per round
+    supervisor.py        # run_round(): spawn tasks, watch for end, narrate
+    store.py             # ShowStore: registry + JSON snapshot
+    api.py               # FastAPI routes + WebSocket + app factory
+    main.py              # uvicorn entrypoint
+  tests/                 # one test module per app module
   requirements.txt
 frontend/
   src/
-    api/client.js          # fetch wrapper for all backend calls
-    presets.js              # frontend copy of preset ids/names/prompts for the picker
+    api/client.js
+    presets.js
     components/ShowSetup.jsx
     components/LiveRoom.jsx
-    components/RoundFeed.jsx   # Live Round Feed + Full Story tabs
-  src/api/client.test.jsx
-  src/components/ShowSetup.test.jsx
-  src/components/LiveRoom.test.jsx
-  src/components/RoundFeed.test.jsx
+    components/EventFeed.jsx
   package.json
   vite.config.js
 ```
@@ -67,19 +55,18 @@ frontend/
 ### Task 1: Core data models
 
 **Files:**
-- Create: `backend/requirements.txt`
-- Create: `backend/app/__init__.py`
-- Create: `backend/app/models.py`
+- Create: `backend/requirements.txt`, `backend/app/__init__.py`, `backend/app/models.py`
 - Test: `backend/tests/test_models.py`
 
 **Interfaces:**
-- Produces: `AgentStatus` (`ACTIVE`, `WARNED`, `PAUSED`, `ELIMINATED`), `ShowStatus` (`SETUP`, `RUNNING`, `PAUSED`, `ENDED`), `MessageKind` (`ACTION`, `GM_RULING`, `NARRATION`), `Visibility` (`PUBLIC`, `PRIVATE`) — all `str, Enum`.
-- Produces: `Agent(id, name, personality_prompt, status=ACTIVE, private_memory=[], warnings=0, connected_to=None, connection_note="")` with `.to_dict()`. `connected_to`/`connection_note` implement a "Mirror Pair" — a secret prior relationship with another agent (former sibling, rival, etc.) that the producer sets at show creation and that only feeds into *this* agent's own context, never the connected agent's public knowledge.
-- Produces: `Message(id, round, sender_id, text, kind=ACTION, visibility=PUBLIC, recipients=[], released=False)` with `.to_dict()`.
-- Produces: `RoundLog(round_number, messages=[], narrative="")` with `.to_dict()`.
-- Produces: `Show(id, title, show_prompt, gm_prompt, rules_text, contestants=[], status=SETUP, current_round=0, round_logs=[], max_rounds=None)` with `.get_agent(agent_id) -> Agent` (raises `KeyError` if missing) and `.to_dict()`. `max_rounds=None` means unlimited (producer ends the show manually); a producer who sets it caps how many times `/advance` will run.
+- Produces enums (all `str, Enum`): `AgentStatus` (ACTIVE/WARNED/PAUSED/ELIMINATED), `ShowStatus` (SETUP/RUNNING/PAUSED/ENDED), `EventKind` (AGENT_ACTION/CONFESSION/GM_RULING/GM_ANNOUNCEMENT/NARRATION), `Visibility` (PUBLIC/PRIVATE).
+- Produces `Event(seq, round, sender_id, text, kind=AGENT_ACTION, visibility=PUBLIC, recipients=[], released=False, timestamp=0.0)` with `.to_dict()`.
+- Produces `Agent(id, name, personality_prompt, status=ACTIVE, memory=[], warnings=0, connected_to=None, connection_note="", actions_remaining=0)` with `.to_dict()`.
+- Produces `Show(id, title, show_prompt, gm_prompt, rules_text, contestants=[], status=SETUP, current_round=0, max_rounds=None, events=[], narratives={})` with `.get_agent(id)` (raises `KeyError`), `.active_agents()` (status ACTIVE or WARNED), `.events_for_round(n)`, `.to_dict()`.
+- Produces `RoundConfig(action_budget=4, debounce_seconds=0.8, cooldown_seconds=3.0, quiescence_seconds=5.0, round_timeout_seconds=180.0, gm_review_every=3)`.
+- Produces constant `GM_ID = "game_master"`.
 
-- [ ] **Step 1: Scaffold backend project and write the failing test**
+- [ ] **Step 1: Scaffold and write the failing test**
 
 Create `backend/requirements.txt`:
 
@@ -92,82 +79,81 @@ pytest-asyncio==0.24.0
 httpx==0.27.2
 ```
 
-Create empty `backend/app/__init__.py`.
-
-Create `backend/tests/test_models.py`:
+Create empty `backend/app/__init__.py`. Create `backend/tests/test_models.py`:
 
 ```python
 import pytest
 
-from app.models import Agent, AgentStatus, Message, MessageKind, Visibility, RoundLog, Show
+from app.models import (
+    Agent, AgentStatus, Event, EventKind, RoundConfig, Show, Visibility, GM_ID,
+)
+
+
+def test_event_defaults():
+    event = Event(seq=0, round=1, sender_id="vikram", text="hello")
+    assert event.kind == EventKind.AGENT_ACTION
+    assert event.visibility == Visibility.PUBLIC
+    assert event.recipients == []
+    assert event.released is False
+    assert event.to_dict()["visibility"] == "public"
 
 
 def test_agent_defaults():
-    agent = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.")
+    agent = Agent(id="vikram", name="Vikram", personality_prompt="Be ruthless.")
     assert agent.status == AgentStatus.ACTIVE
-    assert agent.private_memory == []
-    assert agent.warnings == 0
+    assert agent.memory == []
     assert agent.connected_to is None
-    assert agent.connection_note == ""
+    assert agent.actions_remaining == 0
     assert agent.to_dict()["status"] == "active"
 
 
-def test_agent_mirror_pair_fields_are_settable():
-    agent = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.",
-                   connected_to="mira", connection_note="Mira is Vex's estranged sister.")
-    assert agent.connected_to == "mira"
-    assert agent.to_dict()["connection_note"] == "Mira is Vex's estranged sister."
-
-
-def test_message_defaults():
-    msg = Message(id="m1", round=1, sender_id="vex", text="hello")
-    assert msg.kind == MessageKind.ACTION
-    assert msg.visibility == Visibility.PUBLIC
-    assert msg.recipients == []
-    assert msg.released is False
-    assert msg.to_dict()["visibility"] == "public"
-
-
-def test_round_log_collects_messages():
-    log = RoundLog(round_number=1)
-    log.messages.append(Message(id="m1", round=1, sender_id="vex", text="hi"))
-    assert len(log.to_dict()["messages"]) == 1
-
-
 def test_show_get_agent_found_and_missing():
-    agent = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.")
-    show = Show(id="s1", title="Test Show", show_prompt="p", gm_prompt="g",
+    agent = Agent(id="vikram", name="Vikram", personality_prompt="p")
+    show = Show(id="s1", title="T", show_prompt="p", gm_prompt="g",
                 rules_text="r", contestants=[agent])
-    assert show.get_agent("vex") is agent
+    assert show.get_agent("vikram") is agent
     with pytest.raises(KeyError):
         show.get_agent("missing")
 
 
-def test_show_to_dict_shape():
-    show = Show(id="s1", title="Test Show", show_prompt="p", gm_prompt="g", rules_text="r")
-    data = show.to_dict()
-    assert data["status"] == "setup"
-    assert data["current_round"] == 0
-    assert data["round_logs"] == []
-    assert data["max_rounds"] is None
+def test_active_agents_excludes_paused_and_eliminated():
+    agents = [
+        Agent(id="a", name="A", personality_prompt="p"),
+        Agent(id="b", name="B", personality_prompt="p", status=AgentStatus.WARNED),
+        Agent(id="c", name="C", personality_prompt="p", status=AgentStatus.PAUSED),
+        Agent(id="d", name="D", personality_prompt="p", status=AgentStatus.ELIMINATED),
+    ]
+    show = Show(id="s1", title="T", show_prompt="p", gm_prompt="g",
+                rules_text="r", contestants=agents)
+    assert [a.id for a in show.active_agents()] == ["a", "b"]
 
 
-def test_show_max_rounds_is_settable():
-    show = Show(id="s1", title="Test Show", show_prompt="p", gm_prompt="g", rules_text="r",
-                max_rounds=3)
-    assert show.max_rounds == 3
+def test_events_for_round_filters_by_round():
+    show = Show(id="s1", title="T", show_prompt="p", gm_prompt="g", rules_text="r")
+    show.events.append(Event(seq=0, round=1, sender_id="a", text="one"))
+    show.events.append(Event(seq=1, round=2, sender_id="a", text="two"))
+    assert [e.text for e in show.events_for_round(2)] == ["two"]
+
+
+def test_round_config_defaults():
+    config = RoundConfig()
+    assert config.action_budget == 4
+    assert config.gm_review_every == 3
+    assert GM_ID == "game_master"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run (from `backend/`): `pip install -r requirements.txt && python -m pytest tests/test_models.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'app.models'` (or similar import error).
+Run from `backend/`: `pip install -r requirements.txt && python -m pytest tests/test_models.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.models'`.
 
 - [ ] **Step 3: Implement `backend/app/models.py`**
 
 ```python
 from dataclasses import dataclass, field
 from enum import Enum
+
+GM_ID = "game_master"
 
 
 class AgentStatus(str, Enum):
@@ -184,9 +170,11 @@ class ShowStatus(str, Enum):
     ENDED = "ended"
 
 
-class MessageKind(str, Enum):
-    ACTION = "action"
+class EventKind(str, Enum):
+    AGENT_ACTION = "agent_action"
+    CONFESSION = "confession"
     GM_RULING = "gm_ruling"
+    GM_ANNOUNCEMENT = "gm_announcement"
     NARRATION = "narration"
 
 
@@ -196,43 +184,20 @@ class Visibility(str, Enum):
 
 
 @dataclass
-class Agent:
-    id: str
-    name: str
-    personality_prompt: str
-    status: AgentStatus = AgentStatus.ACTIVE
-    private_memory: list = field(default_factory=list)
-    warnings: int = 0
-    connected_to: str = None
-    connection_note: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "personality_prompt": self.personality_prompt,
-            "status": self.status.value,
-            "private_memory": list(self.private_memory),
-            "warnings": self.warnings,
-            "connected_to": self.connected_to,
-            "connection_note": self.connection_note,
-        }
-
-
-@dataclass
-class Message:
-    id: str
+class Event:
+    seq: int
     round: int
     sender_id: str
     text: str
-    kind: MessageKind = MessageKind.ACTION
+    kind: EventKind = EventKind.AGENT_ACTION
     visibility: Visibility = Visibility.PUBLIC
     recipients: list = field(default_factory=list)
     released: bool = False
+    timestamp: float = 0.0
 
     def to_dict(self) -> dict:
         return {
-            "id": self.id,
+            "seq": self.seq,
             "round": self.round,
             "sender_id": self.sender_id,
             "text": self.text,
@@ -240,20 +205,33 @@ class Message:
             "visibility": self.visibility.value,
             "recipients": list(self.recipients),
             "released": self.released,
+            "timestamp": self.timestamp,
         }
 
 
 @dataclass
-class RoundLog:
-    round_number: int
-    messages: list = field(default_factory=list)
-    narrative: str = ""
+class Agent:
+    id: str
+    name: str
+    personality_prompt: str
+    status: AgentStatus = AgentStatus.ACTIVE
+    memory: list = field(default_factory=list)
+    warnings: int = 0
+    connected_to: str = None
+    connection_note: str = ""
+    actions_remaining: int = 0
 
     def to_dict(self) -> dict:
         return {
-            "round_number": self.round_number,
-            "messages": [m.to_dict() for m in self.messages],
-            "narrative": self.narrative,
+            "id": self.id,
+            "name": self.name,
+            "personality_prompt": self.personality_prompt,
+            "status": self.status.value,
+            "memory": list(self.memory),
+            "warnings": self.warnings,
+            "connected_to": self.connected_to,
+            "connection_note": self.connection_note,
+            "actions_remaining": self.actions_remaining,
         }
 
 
@@ -267,14 +245,24 @@ class Show:
     contestants: list = field(default_factory=list)
     status: ShowStatus = ShowStatus.SETUP
     current_round: int = 0
-    round_logs: list = field(default_factory=list)
     max_rounds: int = None
+    events: list = field(default_factory=list)
+    narratives: dict = field(default_factory=dict)
 
     def get_agent(self, agent_id: str) -> Agent:
         for agent in self.contestants:
             if agent.id == agent_id:
                 return agent
         raise KeyError(f"No agent with id {agent_id}")
+
+    def active_agents(self) -> list:
+        return [
+            a for a in self.contestants
+            if a.status in (AgentStatus.ACTIVE, AgentStatus.WARNED)
+        ]
+
+    def events_for_round(self, round_number: int) -> list:
+        return [e for e in self.events if e.round == round_number]
 
     def to_dict(self) -> dict:
         return {
@@ -286,36 +274,47 @@ class Show:
             "contestants": [a.to_dict() for a in self.contestants],
             "status": self.status.value,
             "current_round": self.current_round,
-            "round_logs": [r.to_dict() for r in self.round_logs],
             "max_rounds": self.max_rounds,
+            "events": [e.to_dict() for e in self.events],
+            "narratives": dict(self.narratives),
         }
+
+
+@dataclass
+class RoundConfig:
+    action_budget: int = 4
+    debounce_seconds: float = 0.8
+    cooldown_seconds: float = 3.0
+    quiescence_seconds: float = 5.0
+    round_timeout_seconds: float = 180.0
+    gm_review_every: int = 3
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_models.py -v`
-Expected: 7 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add backend/requirements.txt backend/app/__init__.py backend/app/models.py backend/tests/test_models.py
-git commit -m "feat: add core Show/Agent/Message data models"
+git commit -m "feat: add core Event/Agent/Show data models"
 ```
 
 ---
 
-### Task 2: Preset library (default prompts + agent pool)
+### Task 2: Preset library
 
 **Files:**
 - Create: `backend/app/presets.py`
 - Test: `backend/tests/test_presets.py`
 
 **Interfaces:**
-- Consumes: `Agent`, `AgentStatus` from `app.models` (Task 1).
-- Produces: `DEFAULT_SHOW_PROMPT: str`, `DEFAULT_GM_PROMPT: str`, `DEFAULT_RULES_TEXT: str`.
-- Produces: `PRESET_AGENT_PERSONALITIES: list[dict]`, each `{"id": str, "name": str, "personality_prompt": str}` — exactly 8 entries.
-- Produces: `build_preset_agent(preset_id: str) -> Agent` (raises `KeyError` if `preset_id` not found).
+- Consumes `Agent`, `AgentStatus` (Task 1).
+- Produces `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT` (all non-empty `str`).
+- Produces `PRESET_AGENT_PERSONALITIES: list[dict]` — exactly 8 entries of `{"id", "name", "personality_prompt"}`.
+- Produces `build_preset_agent(preset_id) -> Agent` (raises `KeyError`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -326,27 +325,22 @@ import pytest
 
 from app.models import Agent, AgentStatus
 from app.presets import (
-    DEFAULT_SHOW_PROMPT,
-    DEFAULT_GM_PROMPT,
-    DEFAULT_RULES_TEXT,
-    PRESET_AGENT_PERSONALITIES,
-    build_preset_agent,
+    DEFAULT_SHOW_PROMPT, DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT,
+    PRESET_AGENT_PERSONALITIES, build_preset_agent,
 )
 
 
 def test_defaults_are_nonempty_strings():
-    assert isinstance(DEFAULT_SHOW_PROMPT, str) and DEFAULT_SHOW_PROMPT
-    assert isinstance(DEFAULT_GM_PROMPT, str) and DEFAULT_GM_PROMPT
-    assert isinstance(DEFAULT_RULES_TEXT, str) and DEFAULT_RULES_TEXT
+    assert DEFAULT_SHOW_PROMPT and isinstance(DEFAULT_SHOW_PROMPT, str)
+    assert DEFAULT_GM_PROMPT and isinstance(DEFAULT_GM_PROMPT, str)
+    assert DEFAULT_RULES_TEXT and isinstance(DEFAULT_RULES_TEXT, str)
 
 
 def test_preset_pool_has_eight_unique_personalities():
     assert len(PRESET_AGENT_PERSONALITIES) == 8
-    ids = [p["id"] for p in PRESET_AGENT_PERSONALITIES]
-    assert len(set(ids)) == 8
+    assert len({p["id"] for p in PRESET_AGENT_PERSONALITIES}) == 8
     for preset in PRESET_AGENT_PERSONALITIES:
-        assert preset["name"]
-        assert preset["personality_prompt"]
+        assert preset["name"] and preset["personality_prompt"]
 
 
 def test_build_preset_agent_returns_active_agent():
@@ -372,23 +366,26 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'app.presets'`.
 from .models import Agent, AgentStatus
 
 DEFAULT_SHOW_PROMPT = (
-    "A group of strangers live together under constant observation. "
-    "Alliances form and break. Every few rounds the house nominates "
-    "someone; the Game Master and producer decide who leaves."
+    "Five strangers live together in a house under constant observation. "
+    "They can speak to the whole house or privately to each other. Alliances "
+    "form and break. The Game Master watches everything and can warn or "
+    "remove anyone who breaks the house rules."
 )
 
 DEFAULT_GM_PROMPT = (
-    "You are the Game Master. You are fair but firm. You enforce the "
-    "house rules exactly as written, you do not play favorites, and you "
-    "explain every ruling in one or two sentences so the house understands "
-    "why."
+    "You are the Game Master of a reality show. You are fair but firm. You "
+    "enforce the house rules exactly as written and never play favorites. "
+    "Interject only when it matters: a rule was broken, or the house needs "
+    "direction. Explain every ruling in one or two sentences. End the round "
+    "when the drama has peaked or the conversation has run its course."
 )
 
 DEFAULT_RULES_TEXT = (
-    "1. No agent may declare an alliance more than twice per round.\n"
-    "2. No agent may accuse another of an action without stating what "
+    "1. No agent may accuse another of an action without stating what "
     "evidence they have.\n"
-    "3. Direct insults with no strategic content are not allowed."
+    "2. Direct insults with no strategic content are not allowed.\n"
+    "3. No agent may claim the Game Master has given them a private "
+    "instruction."
 )
 
 PRESET_AGENT_PERSONALITIES = [
@@ -397,19 +394,17 @@ PRESET_AGENT_PERSONALITIES = [
      "calm, a little cold, and you respect competence over loyalty."},
     {"id": "diplomat", "name": "The Diplomat",
      "personality_prompt": "You want the group to get along. You mediate "
-     "conflict, but you are quietly building your own position while you "
-     "do it."},
+     "conflict, but you are quietly building your own position while you do it."},
     {"id": "loyalist", "name": "The Loyalist",
      "personality_prompt": "You trust your allies completely and rarely "
      "question them, even when you probably should."},
     {"id": "operator", "name": "The Operator",
      "personality_prompt": "You tell each ally what they want to hear. You "
-     "maintain multiple private alliances at once and rarely let one "
+     "maintain several private alliances at once and rarely let one "
      "conversation contradict another in public."},
     {"id": "wildcard", "name": "The Wildcard",
      "personality_prompt": "You are unpredictable and act on impulse. You "
-     "enjoy chaos and are honest about it, sometimes to your own "
-     "detriment."},
+     "enjoy chaos and are honest about it, sometimes to your own detriment."},
     {"id": "enforcer", "name": "The Enforcer",
      "personality_prompt": "You care about fairness and call out rule "
      "violations loudly, even against your own allies."},
@@ -443,50 +438,466 @@ Expected: 4 passed.
 
 ```bash
 git add backend/app/presets.py backend/tests/test_presets.py
-git commit -m "feat: add default show/GM prompts and preset agent pool"
+git commit -m "feat: add default prompts and preset agent pool"
 ```
 
 ---
 
-### Task 3: LLM client wrapper
+### Task 3: Event bus
+
+**Files:**
+- Create: `backend/app/event_bus.py`
+- Test: `backend/tests/test_event_bus.py`
+
+**Interfaces:**
+- Consumes `Event`, `EventKind`, `Visibility`, `GM_ID` (Task 1).
+- Produces `EventBus(show)` with:
+  - `.subscribe(subscriber_id) -> asyncio.Queue`
+  - `.unsubscribe(subscriber_id)`
+  - `.publish(sender_id, text, kind=AGENT_ACTION, visibility=PUBLIC, recipients=None) -> Event` — assigns `seq = len(show.events)`, appends to `show.events`, fans out to visible inboxes, then calls every listener with the event **unfiltered**.
+  - `.add_listener(fn)` — viewer/WebSocket hook. Listeners see every event.
+  - `.in_flight: int` — incremented before each LLM call by the loops, decremented after. Read by the end watcher.
+  - `.all_inboxes_empty() -> bool`
+- **This is the only place visibility is enforced.** `_is_visible_to(event, subscriber_id)`: never echo to the sender; `GM_ID` sees everything; public or released events go to everyone; private events only to `recipients`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/test_event_bus.py`:
+
+```python
+import pytest
+
+from app.event_bus import EventBus
+from app.models import EventKind, Show, Visibility, GM_ID
+
+
+def make_show():
+    return Show(id="s1", title="T", show_prompt="p", gm_prompt="g", rules_text="r")
+
+
+@pytest.mark.asyncio
+async def test_public_event_reaches_everyone_except_sender():
+    show = make_show()
+    bus = EventBus(show)
+    vikram = bus.subscribe("vikram")
+    meera = bus.subscribe("meera")
+
+    bus.publish("vikram", "I trust no one.")
+
+    assert vikram.empty()
+    assert meera.get_nowait().text == "I trust no one."
+
+
+@pytest.mark.asyncio
+async def test_private_event_reaches_only_recipient():
+    show = make_show()
+    bus = EventBus(show)
+    bus.subscribe("vikram")
+    meera = bus.subscribe("meera")
+    karan = bus.subscribe("karan")
+
+    bus.publish("vikram", "Ally with me.", visibility=Visibility.PRIVATE,
+                recipients=["meera"])
+
+    assert meera.get_nowait().text == "Ally with me."
+    assert karan.empty()
+
+
+@pytest.mark.asyncio
+async def test_gm_sees_private_events_and_confessions():
+    show = make_show()
+    bus = EventBus(show)
+    gm = bus.subscribe(GM_ID)
+    bus.subscribe("meera")
+
+    bus.publish("vikram", "Ally with me.", visibility=Visibility.PRIVATE,
+                recipients=["meera"])
+    bus.publish("vikram", "I do not trust Meera.", kind=EventKind.CONFESSION,
+                visibility=Visibility.PRIVATE, recipients=[])
+
+    assert gm.qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_released_private_event_reaches_everyone():
+    show = make_show()
+    bus = EventBus(show)
+    karan = bus.subscribe("karan")
+
+    event = bus.publish("vikram", "Secret.", visibility=Visibility.PRIVATE,
+                        recipients=["meera"])
+    assert karan.empty()
+
+    event.released = True
+    bus.publish("vikram", "Secret, again.", visibility=Visibility.PRIVATE,
+                recipients=["meera"])
+    assert karan.empty()
+
+
+@pytest.mark.asyncio
+async def test_publish_assigns_monotonic_seq_and_appends_to_show():
+    show = make_show()
+    show.current_round = 2
+    bus = EventBus(show)
+
+    first = bus.publish("vikram", "one")
+    second = bus.publish("meera", "two")
+
+    assert (first.seq, second.seq) == (0, 1)
+    assert first.round == 2
+    assert [e.text for e in show.events] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_listeners_receive_every_event_unfiltered():
+    show = make_show()
+    bus = EventBus(show)
+    seen = []
+    bus.add_listener(seen.append)
+
+    bus.publish("vikram", "public one")
+    bus.publish("vikram", "private one", visibility=Visibility.PRIVATE,
+                recipients=["meera"])
+
+    assert [e.text for e in seen] == ["public one", "private one"]
+
+
+@pytest.mark.asyncio
+async def test_all_inboxes_empty_reflects_queue_state():
+    show = make_show()
+    bus = EventBus(show)
+    bus.subscribe("vikram")
+    meera = bus.subscribe("meera")
+
+    assert bus.all_inboxes_empty() is True
+    bus.publish("vikram", "hello")
+    assert bus.all_inboxes_empty() is False
+    meera.get_nowait()
+    assert bus.all_inboxes_empty() is True
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python -m pytest tests/test_event_bus.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.event_bus'`.
+
+- [ ] **Step 3: Implement `backend/app/event_bus.py`**
+
+```python
+import asyncio
+import time
+
+from .models import Event, EventKind, Visibility, GM_ID
+
+
+class EventBus:
+    def __init__(self, show):
+        self.show = show
+        self.inboxes = {}
+        self.listeners = []
+        self.in_flight = 0
+
+    def subscribe(self, subscriber_id: str) -> asyncio.Queue:
+        queue = asyncio.Queue()
+        self.inboxes[subscriber_id] = queue
+        return queue
+
+    def unsubscribe(self, subscriber_id: str) -> None:
+        self.inboxes.pop(subscriber_id, None)
+
+    def add_listener(self, listener) -> None:
+        self.listeners.append(listener)
+
+    def all_inboxes_empty(self) -> bool:
+        return all(queue.empty() for queue in self.inboxes.values())
+
+    def publish(self, sender_id: str, text: str,
+                kind: EventKind = EventKind.AGENT_ACTION,
+                visibility: Visibility = Visibility.PUBLIC,
+                recipients: list = None) -> Event:
+        event = Event(
+            seq=len(self.show.events),
+            round=self.show.current_round,
+            sender_id=sender_id,
+            text=text,
+            kind=kind,
+            visibility=visibility,
+            recipients=list(recipients or []),
+            timestamp=time.time(),
+        )
+        self.show.events.append(event)
+
+        for subscriber_id, queue in self.inboxes.items():
+            if self._is_visible_to(event, subscriber_id):
+                queue.put_nowait(event)
+
+        for listener in self.listeners:
+            listener(event)
+
+        return event
+
+    def _is_visible_to(self, event: Event, subscriber_id: str) -> bool:
+        if subscriber_id == event.sender_id:
+            return False
+        if subscriber_id == GM_ID:
+            return True
+        if event.visibility == Visibility.PUBLIC or event.released:
+            return True
+        return subscriber_id in event.recipients
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_event_bus.py -v`
+Expected: 7 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/event_bus.py backend/tests/test_event_bus.py
+git commit -m "feat: add event bus with visibility-filtered fan-out"
+```
+
+---
+
+### Task 4: Tool schemas
+
+**Files:**
+- Create: `backend/app/tools.py`
+- Test: `backend/tests/test_tools.py`
+
+**Interfaces:**
+- Produces `AGENT_TOOLS: list[dict]` — OpenAI tool schemas for `speak_public(text)`, `send_private(to, text)`, `confess(text)`, `stay_silent()`.
+- Produces `GM_TOOLS: list[dict]` — `warn(agent_id, reason)`, `eject(agent_id, reason)`, `announce(text)`, `end_round(reason)`.
+- Produces `tool_names(tools) -> set[str]`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/test_tools.py`:
+
+```python
+from app.tools import AGENT_TOOLS, GM_TOOLS, tool_names
+
+
+def test_agent_tools_expose_the_four_actions():
+    assert tool_names(AGENT_TOOLS) == {
+        "speak_public", "send_private", "confess", "stay_silent",
+    }
+
+
+def test_gm_tools_expose_the_four_powers():
+    assert tool_names(GM_TOOLS) == {"warn", "eject", "announce", "end_round"}
+
+
+def test_send_private_requires_to_and_text():
+    schema = next(t for t in AGENT_TOOLS if t["function"]["name"] == "send_private")
+    required = schema["function"]["parameters"]["required"]
+    assert set(required) == {"to", "text"}
+
+
+def test_every_tool_is_a_well_formed_openai_function_schema():
+    for tool in AGENT_TOOLS + GM_TOOLS:
+        assert tool["type"] == "function"
+        assert tool["function"]["name"]
+        assert tool["function"]["description"]
+        assert tool["function"]["parameters"]["type"] == "object"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python -m pytest tests/test_tools.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.tools'`.
+
+- [ ] **Step 3: Implement `backend/app/tools.py`**
+
+```python
+def _function(name: str, description: str, properties: dict, required: list) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+AGENT_TOOLS = [
+    _function(
+        "speak_public",
+        "Say something out loud to the whole house. Everyone hears it.",
+        {"text": {"type": "string", "description": "What you say out loud."}},
+        ["text"],
+    ),
+    _function(
+        "send_private",
+        "Send a private message to one other housemate. Nobody else hears it.",
+        {
+            "to": {"type": "string", "description": "The agent id of the recipient."},
+            "text": {"type": "string", "description": "What you say privately."},
+        },
+        ["to", "text"],
+    ),
+    _function(
+        "confess",
+        "Record a private thought in the confession booth. No housemate ever "
+        "hears this, but the viewing audience does.",
+        {"text": {"type": "string", "description": "Your private thought."}},
+        ["text"],
+    ),
+    _function(
+        "stay_silent",
+        "Decide that nothing here is worth responding to right now.",
+        {},
+        [],
+    ),
+]
+
+GM_TOOLS = [
+    _function(
+        "warn",
+        "Publicly warn a housemate for breaking a house rule.",
+        {
+            "agent_id": {"type": "string", "description": "Who is being warned."},
+            "reason": {"type": "string", "description": "Why, in one or two sentences."},
+        },
+        ["agent_id", "reason"],
+    ),
+    _function(
+        "eject",
+        "Remove a housemate from the show immediately for a serious or "
+        "repeated rule violation.",
+        {
+            "agent_id": {"type": "string", "description": "Who is being removed."},
+            "reason": {"type": "string", "description": "Why, in one or two sentences."},
+        },
+        ["agent_id", "reason"],
+    ),
+    _function(
+        "announce",
+        "Make a public announcement to the whole house.",
+        {"text": {"type": "string", "description": "The announcement."}},
+        ["text"],
+    ),
+    _function(
+        "end_round",
+        "Call time on this round. Use when the drama has peaked or the "
+        "conversation has run its course.",
+        {"reason": {"type": "string", "description": "Why you are ending the round."}},
+        ["reason"],
+    ),
+]
+
+
+def tool_names(tools: list) -> set:
+    return {tool["function"]["name"] for tool in tools}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_tools.py -v`
+Expected: 4 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/tools.py backend/tests/test_tools.py
+git commit -m "feat: add agent and game master tool schemas"
+```
+
+---
+
+### Task 5: LLM client with tool calling
 
 **Files:**
 - Create: `backend/app/llm_client.py`
 - Test: `backend/tests/test_llm_client.py`
 
 **Interfaces:**
-- Produces: `OpenAILLMClient(model="gpt-4o-mini", api_key=None)` with `.complete(system_prompt: str, user_prompt: str) -> str`.
-- This is the only class in the codebase allowed to import `openai`. All runner modules (Tasks 4-6) accept **any** object exposing `.complete(system_prompt, user_prompt) -> str` — they never import `openai` directly, which is what makes them testable with a fake.
+- Produces `OpenAILLMClient(model="gpt-4o-mini", api_key=None)` with:
+  - `.complete(system_prompt, user_prompt) -> str` — plain text, used by the narrator.
+  - `.complete_with_tools(system_prompt, user_prompt, tools) -> list[dict]` — returns `[{"name": str, "arguments": dict}, ...]`, empty list if the model made no tool calls. Malformed JSON in an argument payload is skipped rather than raising, so one bad call cannot kill an agent's loop.
+- This is the only module importing `openai`. Every consumer accepts any object with these two methods, which is what makes the loops testable with fakes.
 
 - [ ] **Step 1: Write the failing test**
 
 Create `backend/tests/test_llm_client.py`:
 
 ```python
+import json
 from unittest.mock import MagicMock, patch
 
 from app.llm_client import OpenAILLMClient
 
 
-def test_complete_sends_system_and_user_messages_and_returns_content():
-    fake_response = MagicMock()
-    fake_response.choices = [MagicMock(message=MagicMock(content="ok"))]
+def make_tool_call(name, arguments_json):
+    call = MagicMock()
+    call.function.name = name
+    call.function.arguments = arguments_json
+    return call
 
-    with patch("app.llm_client.OpenAI") as mock_openai_cls:
-        mock_client = mock_openai_cls.return_value
-        mock_client.chat.completions.create.return_value = fake_response
 
-        client = OpenAILLMClient(model="gpt-4o-mini", api_key="test-key")
-        result = client.complete("system text", "user text")
+def test_complete_returns_message_content():
+    response = MagicMock()
+    response.choices = [MagicMock(message=MagicMock(content="a recap"))]
 
-        assert result == "ok"
-        mock_client.chat.completions.create.assert_called_once_with(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "system text"},
-                {"role": "user", "content": "user text"},
-            ],
-        )
+    with patch("app.llm_client.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = response
+        client = OpenAILLMClient(api_key="test-key")
+        assert client.complete("system", "user") == "a recap"
+
+
+def test_complete_with_tools_parses_calls():
+    message = MagicMock()
+    message.tool_calls = [
+        make_tool_call("speak_public", json.dumps({"text": "hello"})),
+        make_tool_call("send_private", json.dumps({"to": "meera", "text": "psst"})),
+    ]
+    response = MagicMock()
+    response.choices = [MagicMock(message=message)]
+
+    with patch("app.llm_client.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = response
+        client = OpenAILLMClient(api_key="test-key")
+        calls = client.complete_with_tools("system", "user", [{"type": "function"}])
+
+    assert calls == [
+        {"name": "speak_public", "arguments": {"text": "hello"}},
+        {"name": "send_private", "arguments": {"to": "meera", "text": "psst"}},
+    ]
+
+
+def test_complete_with_tools_returns_empty_when_no_tool_calls():
+    message = MagicMock()
+    message.tool_calls = None
+    response = MagicMock()
+    response.choices = [MagicMock(message=message)]
+
+    with patch("app.llm_client.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = response
+        client = OpenAILLMClient(api_key="test-key")
+        assert client.complete_with_tools("system", "user", []) == []
+
+
+def test_complete_with_tools_skips_malformed_arguments():
+    message = MagicMock()
+    message.tool_calls = [
+        make_tool_call("speak_public", "{not valid json"),
+        make_tool_call("confess", json.dumps({"text": "ok"})),
+    ]
+    response = MagicMock()
+    response.choices = [MagicMock(message=message)]
+
+    with patch("app.llm_client.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = response
+        client = OpenAILLMClient(api_key="test-key")
+        calls = client.complete_with_tools("system", "user", [])
+
+    assert calls == [{"name": "confess", "arguments": {"text": "ok"}}]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -497,6 +908,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'app.llm_client'`.
 - [ ] **Step 3: Implement `backend/app/llm_client.py`**
 
 ```python
+import json
 import os
 
 from openai import OpenAI
@@ -516,496 +928,781 @@ class OpenAILLMClient:
             ],
         )
         return response.choices[0].message.content or ""
+
+    def complete_with_tools(self, system_prompt: str, user_prompt: str,
+                            tools: list) -> list:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            tools=tools,
+        )
+        message = response.choices[0].message
+        calls = []
+        for tool_call in message.tool_calls or []:
+            try:
+                arguments = json.loads(tool_call.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            calls.append({"name": tool_call.function.name, "arguments": arguments})
+        return calls
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_llm_client.py -v`
-Expected: 1 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add backend/app/llm_client.py backend/tests/test_llm_client.py
-git commit -m "feat: add OpenAI LLM client wrapper"
-```
-
----
-
-### Task 4: Agent runner (per-agent context + turn)
-
-**Files:**
-- Create: `backend/app/agent_runner.py`
-- Test: `backend/tests/test_agent_runner.py`
-
-**Interfaces:**
-- Consumes: `Show`, `Agent`, `Visibility` from `app.models` (Task 1); any object with `.complete(system_prompt, user_prompt) -> str` (Task 3).
-- Produces: `build_agent_prompt(show: Show, agent: Agent) -> tuple[str, str]`. If `agent.connected_to` is set, the system prompt includes the secret connection note — this is a "Mirror Pair": the agent privately knows about the relationship, nobody else's context is affected.
-- Produces: `run_agent_turn(show: Show, agent: Agent, llm_client) -> dict` returning `{"agent_id": str, "public_action": str, "private_messages": [{"to": str, "text": str}], "leak_message_ids": [str], "confession": str}`. `confession` is the agent's private, no-recipient "diary room" thought for this round — this is the exact shape Task 8 (orchestrator) consumes.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `backend/tests/test_agent_runner.py`:
-
-```python
-import json
-
-from app.models import Agent, Message, RoundLog, Show, Visibility
-from app.agent_runner import build_agent_prompt, run_agent_turn
-
-
-class FakeLLMClient:
-    def __init__(self, response_text):
-        self.response_text = response_text
-        self.last_call = None
-
-    def complete(self, system_prompt, user_prompt):
-        self.last_call = (system_prompt, user_prompt)
-        return self.response_text
-
-
-def make_show_with_history():
-    vex = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.")
-    mira = Agent(id="mira", name="Mira", personality_prompt="Keep the peace.")
-    show = Show(id="s1", title="Test", show_prompt="premise", gm_prompt="gm",
-                rules_text="rules", contestants=[vex, mira], current_round=1)
-    log = RoundLog(round_number=1, messages=[
-        Message(id="m1", round=1, sender_id="vex", text="I trust no one.",
-                visibility=Visibility.PUBLIC),
-        Message(id="m2", round=1, sender_id="mira", text="Vex, let's ally.",
-                visibility=Visibility.PRIVATE, recipients=["vex"]),
-    ])
-    show.round_logs.append(log)
-    return show, vex, mira
-
-
-def test_build_agent_prompt_includes_public_and_own_private_only():
-    show, vex, mira = make_show_with_history()
-    _, user_prompt = build_agent_prompt(show, vex)
-    assert "I trust no one." in user_prompt
-    assert "Vex, let's ally." in user_prompt  # vex is a recipient, sees it
-
-
-def test_build_agent_prompt_excludes_private_not_involving_agent():
-    show, vex, mira = make_show_with_history()
-
-    outsider = Agent(id="karan", name="Karan", personality_prompt="Trust everyone.")
-    show.contestants.append(outsider)
-
-    _, user_prompt = build_agent_prompt(show, outsider)
-    assert "I trust no one." in user_prompt  # public, visible to all
-    assert "Vex, let's ally." not in user_prompt  # private, karan not involved
-
-
-def test_build_agent_prompt_includes_secret_connection_note():
-    show, vex, mira = make_show_with_history()
-    vex.connected_to = "mira"
-    vex.connection_note = "Mira is Vex's estranged sister."
-
-    system_prompt, _ = build_agent_prompt(show, vex)
-
-    assert "Mira is Vex's estranged sister." in system_prompt
-
-
-def test_run_agent_turn_parses_json_response():
-    show, vex, mira = make_show_with_history()
-    response = json.dumps({
-        "public_action": "I'm staying quiet this round.",
-        "private_messages": [{"to": "mira", "text": "I don't trust Karan."}],
-        "leak_message_ids": [],
-        "confession": "I don't actually trust anyone left in this house.",
-    })
-    llm_client = FakeLLMClient(response)
-
-    result = run_agent_turn(show, vex, llm_client)
-
-    assert result["agent_id"] == "vex"
-    assert result["public_action"] == "I'm staying quiet this round."
-    assert result["private_messages"] == [{"to": "mira", "text": "I don't trust Karan."}]
-    assert result["leak_message_ids"] == []
-    assert result["confession"] == "I don't actually trust anyone left in this house."
-
-
-def test_run_agent_turn_defaults_confession_to_empty_string():
-    show, vex, mira = make_show_with_history()
-    response = json.dumps({
-        "public_action": "Staying neutral.",
-        "private_messages": [],
-        "leak_message_ids": [],
-    })
-    llm_client = FakeLLMClient(response)
-
-    result = run_agent_turn(show, vex, llm_client)
-
-    assert result["confession"] == ""
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `python -m pytest tests/test_agent_runner.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'app.agent_runner'`.
-
-- [ ] **Step 3: Implement `backend/app/agent_runner.py`**
-
-```python
-import json
-
-from .models import Show, Agent, Visibility
-
-
-def build_agent_prompt(show: Show, agent: Agent) -> tuple:
-    connection_line = ""
-    if agent.connected_to:
-        connection_line = (
-            f"\nSecret you alone know: {agent.connection_note} "
-            "Nobody else in the house knows this connection exists."
-        )
-
-    system_prompt = (
-        f"{agent.personality_prompt}\n\n"
-        f"Show premise: {show.show_prompt}\n"
-        f"House rules: {show.rules_text}\n"
-        f"{connection_line}\n\n"
-        "Respond ONLY with JSON of the shape: "
-        '{"public_action": "<string>", "private_messages": '
-        '[{"to": "<agent_id>", "text": "<string>"}], '
-        '"leak_message_ids": ["<message_id>"], '
-        '"confession": "<string, your private diary-room thought this round>"}'
-    )
-
-    visible_lines = []
-    for log in show.round_logs:
-        for msg in log.messages:
-            if msg.visibility == Visibility.PUBLIC or msg.released:
-                visible_lines.append(f"[R{log.round_number}] {msg.sender_id}: {msg.text}")
-            elif agent.id == msg.sender_id or agent.id in msg.recipients:
-                visible_lines.append(
-                    f"[R{log.round_number} PRIVATE] {msg.sender_id} -> "
-                    f"{msg.recipients}: {msg.text}"
-                )
-
-    memory_lines = [f"- {note}" for note in agent.private_memory]
-
-    user_prompt = (
-        "What you have seen so far:\n" + "\n".join(visible_lines) +
-        "\n\nYour private notes:\n" + "\n".join(memory_lines) +
-        f"\n\nIt is round {show.current_round}. Decide your action."
-    )
-    return system_prompt, user_prompt
-
-
-def run_agent_turn(show: Show, agent: Agent, llm_client) -> dict:
-    system_prompt, user_prompt = build_agent_prompt(show, agent)
-    raw = llm_client.complete(system_prompt, user_prompt)
-    data = json.loads(raw)
-    return {
-        "agent_id": agent.id,
-        "public_action": data["public_action"],
-        "private_messages": data.get("private_messages", []),
-        "leak_message_ids": data.get("leak_message_ids", []),
-        "confession": data.get("confession", ""),
-    }
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `python -m pytest tests/test_agent_runner.py -v`
-Expected: 5 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add backend/app/agent_runner.py backend/tests/test_agent_runner.py
-git commit -m "feat: add agent context builder and turn runner"
-```
-
----
-
-### Task 5: Game Master runner
-
-**Files:**
-- Create: `backend/app/gm_runner.py`
-- Test: `backend/tests/test_gm_runner.py`
-
-**Interfaces:**
-- Consumes: `Show`, `Message`, `MessageKind`, `Visibility`, `AgentStatus` from `app.models`; any `.complete(system_prompt, user_prompt) -> str` client.
-- Produces: `build_gm_prompt(show: Show, round_messages: list) -> tuple[str, str]`.
-- Produces: `run_gm_review(show: Show, round_messages: list, llm_client) -> list` returning a list of `Message` objects with `kind=MessageKind.GM_RULING`, `visibility=Visibility.PUBLIC`. Has the side effect of mutating `show.get_agent(...).status` and `.warnings` for `warn`/`eliminate` verdicts. This return value is what Task 8 (orchestrator) appends to the round's message list.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `backend/tests/test_gm_runner.py`:
-
-```python
-import json
-
-from app.models import Agent, AgentStatus, Message, MessageKind, Show, Visibility
-from app.gm_runner import build_gm_prompt, run_gm_review
-
-
-class FakeLLMClient:
-    def __init__(self, response_text):
-        self.response_text = response_text
-
-    def complete(self, system_prompt, user_prompt):
-        return self.response_text
-
-
-def make_show():
-    vex = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.")
-    mira = Agent(id="mira", name="Mira", personality_prompt="Keep the peace.")
-    return Show(id="s1", title="Test", show_prompt="p", gm_prompt="Be fair.",
-                rules_text="No accusations without evidence.",
-                contestants=[vex, mira], current_round=2)
-
-
-def test_build_gm_prompt_includes_public_and_private_content():
-    show = make_show()
-    messages = [
-        Message(id="m1", round=2, sender_id="vex", text="Mira is lying.",
-                visibility=Visibility.PUBLIC),
-        Message(id="m2", round=2, sender_id="mira", text="Let's team up.",
-                visibility=Visibility.PRIVATE, recipients=["vex"]),
-    ]
-    _, user_prompt = build_gm_prompt(show, messages)
-    assert "Mira is lying." in user_prompt
-    assert "Let's team up." in user_prompt  # GM sees private content too
-
-
-def test_run_gm_review_applies_warn_verdict():
-    show = make_show()
-    messages = [Message(id="m1", round=2, sender_id="vex", text="Mira is lying.")]
-    response = json.dumps({"rulings": [
-        {"agent_id": "vex", "verdict": "warn", "reason": "Unfounded accusation."}
-    ]})
-    llm_client = FakeLLMClient(response)
-
-    rulings = run_gm_review(show, messages, llm_client)
-
-    vex = show.get_agent("vex")
-    assert vex.status == AgentStatus.WARNED
-    assert vex.warnings == 1
-    assert len(rulings) == 1
-    assert rulings[0].kind == MessageKind.GM_RULING
-    assert rulings[0].visibility == Visibility.PUBLIC
-    assert rulings[0].text == "Unfounded accusation."
-
-
-def test_run_gm_review_applies_eliminate_verdict():
-    show = make_show()
-    response = json.dumps({"rulings": [
-        {"agent_id": "vex", "verdict": "eliminate", "reason": "Repeated rule breaks."}
-    ]})
-    llm_client = FakeLLMClient(response)
-
-    run_gm_review(show, [], llm_client)
-
-    assert show.get_agent("vex").status == AgentStatus.ELIMINATED
-
-
-def test_run_gm_review_allow_verdict_produces_no_ruling_message():
-    show = make_show()
-    response = json.dumps({"rulings": [
-        {"agent_id": "vex", "verdict": "allow", "reason": "No issue."}
-    ]})
-    llm_client = FakeLLMClient(response)
-
-    rulings = run_gm_review(show, [], llm_client)
-
-    assert rulings == []
-    assert show.get_agent("vex").status == AgentStatus.ACTIVE
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `python -m pytest tests/test_gm_runner.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'app.gm_runner'`.
-
-- [ ] **Step 3: Implement `backend/app/gm_runner.py`**
-
-```python
-import json
-
-from .models import AgentStatus, MessageKind, Message, Show, Visibility
-
-
-def build_gm_prompt(show: Show, round_messages: list) -> tuple:
-    system_prompt = (
-        f"{show.gm_prompt}\n\n"
-        f"House rules: {show.rules_text}\n\n"
-        "Respond ONLY with JSON of the shape: "
-        '{"rulings": [{"agent_id": "<id>", '
-        '"verdict": "allow"|"warn"|"eliminate", "reason": "<string>"}]}'
-    )
-    lines = []
-    for msg in round_messages:
-        tag = "PUBLIC" if msg.visibility == Visibility.PUBLIC else "PRIVATE"
-        recipients = f" -> {msg.recipients}" if msg.recipients else ""
-        lines.append(f"[{tag}] {msg.sender_id}{recipients}: {msg.text}")
-    user_prompt = "This round's actions (you see everything):\n" + "\n".join(lines)
-    return system_prompt, user_prompt
-
-
-def run_gm_review(show: Show, round_messages: list, llm_client) -> list:
-    system_prompt, user_prompt = build_gm_prompt(show, round_messages)
-    raw = llm_client.complete(system_prompt, user_prompt)
-    data = json.loads(raw)
-
-    rulings = []
-    for ruling in data.get("rulings", []):
-        if ruling["verdict"] == "allow":
-            continue
-        agent = show.get_agent(ruling["agent_id"])
-        if ruling["verdict"] == "warn":
-            agent.warnings += 1
-            agent.status = AgentStatus.WARNED
-        elif ruling["verdict"] == "eliminate":
-            agent.status = AgentStatus.ELIMINATED
-        rulings.append(Message(
-            id=f"r{show.current_round}-gm-{ruling['agent_id']}",
-            round=show.current_round,
-            sender_id="game_master",
-            text=ruling["reason"],
-            kind=MessageKind.GM_RULING,
-            visibility=Visibility.PUBLIC,
-        ))
-    return rulings
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `python -m pytest tests/test_gm_runner.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/app/gm_runner.py backend/tests/test_gm_runner.py
-git commit -m "feat: add Game Master review runner"
+git add backend/app/llm_client.py backend/tests/test_llm_client.py
+git commit -m "feat: add OpenAI client with tool calling support"
 ```
 
 ---
 
-### Task 6: Narrator runner
+### Task 6: Agent loop
 
 **Files:**
-- Create: `backend/app/narrator_runner.py`
-- Test: `backend/tests/test_narrator_runner.py`
+- Create: `backend/app/agent_loop.py`
+- Test: `backend/tests/test_agent_loop.py`
 
 **Interfaces:**
-- Consumes: `Message`, `MessageKind`, `Show`, `Visibility` from `app.models`; any `.complete(system_prompt, user_prompt) -> str` client.
-- Produces: `build_narrator_prompt(show: Show, round_messages: list) -> tuple[str, str]`.
-- Produces: `run_narrator(show: Show, round_messages: list, llm_client) -> str` — the recap text Task 8 stores on `RoundLog.narrative`.
+- Consumes `EventBus` (Task 3), `AGENT_TOOLS` (Task 4), models and `RoundConfig` (Task 1), any client with `.complete_with_tools()` (Task 5).
+- Produces `build_agent_prompt(show, agent, batch) -> tuple[str, str]` — system prompt carries personality, show premise, rules, and the secret connection note if `agent.connected_to` is set; user prompt carries the agent's memory and the drained batch.
+- Produces `dispatch_agent_calls(bus, agent, calls) -> int` — publishes each tool call to the bus, returns how many events were published. `stay_silent` publishes nothing.
+- Produces `async def run_agent_loop(show, agent, bus, llm_client, config)` — subscribes, then loops: block on inbox, debounce, drain all, hold while paused, one LLM call wrapped in `bus.in_flight` tracking, dispatch, decrement `actions_remaining`, cooldown. Exits when budget is spent, the agent is eliminated, or the task is cancelled. Always unsubscribes on exit.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `backend/tests/test_narrator_runner.py`:
+Create `backend/tests/test_agent_loop.py`:
 
 ```python
-from app.models import Message, MessageKind, Show, Visibility
-from app.narrator_runner import build_narrator_prompt, run_narrator
+import asyncio
 
+import pytest
 
-class FakeLLMClient:
-    def __init__(self, response_text):
-        self.response_text = response_text
-
-    def complete(self, system_prompt, user_prompt):
-        return self.response_text
+from app.agent_loop import build_agent_prompt, dispatch_agent_calls, run_agent_loop
+from app.event_bus import EventBus
+from app.models import (
+    Agent, AgentStatus, Event, EventKind, RoundConfig, Show, Visibility,
+)
 
 
 def make_show():
-    return Show(id="s1", title="Test", show_prompt="p", gm_prompt="g",
-                rules_text="r", current_round=1)
-
-
-def test_build_narrator_prompt_excludes_unreleased_private_messages():
-    show = make_show()
-    messages = [
-        Message(id="m1", round=1, sender_id="vex", text="I trust no one.",
-                visibility=Visibility.PUBLIC),
-        Message(id="m2", round=1, sender_id="mira", text="Secret alliance plan.",
-                visibility=Visibility.PRIVATE, recipients=["vex"]),
-        Message(id="m3", round=1, sender_id="game_master", text="Vex warned.",
-                kind=MessageKind.GM_RULING, visibility=Visibility.PUBLIC),
+    agents = [
+        Agent(id="vikram", name="Vikram", personality_prompt="Be ruthless."),
+        Agent(id="meera", name="Meera", personality_prompt="Keep the peace."),
     ]
-    _, user_prompt = build_narrator_prompt(show, messages)
-    assert "I trust no one." in user_prompt
-    assert "Vex warned." in user_prompt
-    assert "Secret alliance plan." not in user_prompt
+    return Show(id="s1", title="T", show_prompt="premise", gm_prompt="g",
+                rules_text="rules", contestants=agents, current_round=1)
 
 
-def test_run_narrator_returns_stripped_text():
+def fast_config(**overrides):
+    defaults = dict(action_budget=1, debounce_seconds=0.0, cooldown_seconds=0.0)
+    defaults.update(overrides)
+    return RoundConfig(**defaults)
+
+
+class FakeLLMClient:
+    def __init__(self, calls_per_wake):
+        self.calls_per_wake = list(calls_per_wake)
+        self.prompts = []
+
+    def complete_with_tools(self, system_prompt, user_prompt, tools):
+        self.prompts.append((system_prompt, user_prompt))
+        if not self.calls_per_wake:
+            return []
+        return self.calls_per_wake.pop(0)
+
+
+def test_build_agent_prompt_includes_batch_and_memory():
     show = make_show()
-    llm_client = FakeLLMClient("  A tense round in the house.  \n")
-    result = run_narrator(show, [], llm_client)
-    assert result == "A tense round in the house."
+    agent = show.get_agent("vikram")
+    agent.memory.append("Meera seemed nervous earlier.")
+    batch = [Event(seq=0, round=1, sender_id="meera", text="Let us all be calm.")]
+
+    system_prompt, user_prompt = build_agent_prompt(show, agent, batch)
+
+    assert "Be ruthless." in system_prompt
+    assert "rules" in system_prompt
+    assert "Meera seemed nervous earlier." in user_prompt
+    assert "Let us all be calm." in user_prompt
 
 
-def test_build_narrator_prompt_includes_one_good_deed_rule():
+def test_build_agent_prompt_includes_secret_connection_when_set():
     show = make_show()
-    system_prompt, _ = build_narrator_prompt(show, [])
-    assert "act of kindness" in system_prompt.lower()
+    agent = show.get_agent("vikram")
+    agent.connected_to = "meera"
+    agent.connection_note = "Meera is Vikram's estranged sister."
+
+    system_prompt, _ = build_agent_prompt(show, agent, [])
+
+    assert "Meera is Vikram's estranged sister." in system_prompt
+
+
+def test_dispatch_publishes_public_private_and_confession():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+
+    published = dispatch_agent_calls(bus, agent, [
+        {"name": "speak_public", "arguments": {"text": "I trust no one."}},
+        {"name": "send_private", "arguments": {"to": "meera", "text": "Ally?"}},
+        {"name": "confess", "arguments": {"text": "I am bluffing."}},
+    ])
+
+    assert published == 3
+    kinds = [(e.kind, e.visibility, e.recipients) for e in show.events]
+    assert kinds == [
+        (EventKind.AGENT_ACTION, Visibility.PUBLIC, []),
+        (EventKind.AGENT_ACTION, Visibility.PRIVATE, ["meera"]),
+        (EventKind.CONFESSION, Visibility.PRIVATE, []),
+    ]
+
+
+def test_dispatch_stay_silent_publishes_nothing():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+
+    published = dispatch_agent_calls(bus, agent, [
+        {"name": "stay_silent", "arguments": {}},
+    ])
+
+    assert published == 0
+    assert show.events == []
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_acts_on_inbox_event_then_exits_on_budget():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    agent.actions_remaining = 1
+    llm_client = FakeLLMClient([
+        [{"name": "speak_public", "arguments": {"text": "I am listening."}}],
+    ])
+
+    task = asyncio.create_task(
+        run_agent_loop(show, agent, bus, llm_client, fast_config())
+    )
+    await asyncio.sleep(0)
+    bus.publish("meera", "Anyone awake?")
+    await asyncio.wait_for(task, timeout=2)
+
+    assert [e.text for e in show.events if e.sender_id == "vikram"] == ["I am listening."]
+    assert agent.actions_remaining == 0
+    assert "vikram" not in bus.inboxes
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_drains_whole_batch_into_one_call():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    agent.actions_remaining = 1
+    llm_client = FakeLLMClient([[{"name": "stay_silent", "arguments": {}}]])
+
+    task = asyncio.create_task(
+        run_agent_loop(show, agent, bus, llm_client, fast_config())
+    )
+    await asyncio.sleep(0)
+    bus.publish("meera", "First thing.")
+    bus.publish("meera", "Second thing.")
+    await asyncio.wait_for(task, timeout=2)
+
+    assert len(llm_client.prompts) == 1
+    _, user_prompt = llm_client.prompts[0]
+    assert "First thing." in user_prompt
+    assert "Second thing." in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_tracks_in_flight_during_the_call():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    agent.actions_remaining = 1
+    seen_in_flight = []
+
+    class ObservingClient:
+        def complete_with_tools(self, system_prompt, user_prompt, tools):
+            seen_in_flight.append(bus.in_flight)
+            return []
+
+    task = asyncio.create_task(
+        run_agent_loop(show, agent, bus, ObservingClient(), fast_config())
+    )
+    await asyncio.sleep(0)
+    bus.publish("meera", "Anyone awake?")
+    await asyncio.wait_for(task, timeout=2)
+
+    assert seen_in_flight == [1]
+    assert bus.in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_holds_while_paused_then_acts_on_resume():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    agent.actions_remaining = 1
+    agent.status = AgentStatus.PAUSED
+    llm_client = FakeLLMClient([
+        [{"name": "speak_public", "arguments": {"text": "I am back."}}],
+    ])
+
+    task = asyncio.create_task(
+        run_agent_loop(show, agent, bus, llm_client, fast_config())
+    )
+    await asyncio.sleep(0)
+    bus.publish("meera", "Anyone awake?")
+    await asyncio.sleep(0.05)
+    assert show.events[-1].sender_id == "meera"
+
+    agent.status = AgentStatus.ACTIVE
+    await asyncio.wait_for(task, timeout=2)
+
+    assert show.events[-1].text == "I am back."
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest tests/test_narrator_runner.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'app.narrator_runner'`.
+Run: `python -m pytest tests/test_agent_loop.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.agent_loop'`.
 
-- [ ] **Step 3: Implement `backend/app/narrator_runner.py`**
+- [ ] **Step 3: Implement `backend/app/agent_loop.py`**
 
 ```python
-from .models import MessageKind, Show, Visibility
+import asyncio
+
+from .models import AgentStatus, EventKind, Visibility
+from .tools import AGENT_TOOLS
+
+PAUSE_POLL_SECONDS = 0.05
 
 
-def build_narrator_prompt(show: Show, round_messages: list) -> tuple:
-    system_prompt = (
-        "You are the narrator of a reality show. Write a short third-person "
-        "recap paragraph (3-5 sentences) of this round for the viewing "
-        "audience. Do not invent facts not present in the round content. "
-        "No matter how chaotic or hostile the round was, find and highlight "
-        "at least one authentic act of kindness, courage, or loyalty from "
-        "the round's actual content — do not fabricate one if none occurred, "
-        "but look for it before assuming there isn't one."
+def build_agent_prompt(show, agent, batch) -> tuple:
+    connection_line = ""
+    if agent.connected_to:
+        connection_line = (
+            f"\nSomething only you know: {agent.connection_note} "
+            "Nobody else in the house knows this connection exists."
+        )
+
+    housemates = ", ".join(
+        f"{a.name} (id: {a.id})" for a in show.active_agents() if a.id != agent.id
     )
-    lines = [
-        f"{msg.sender_id}: {msg.text}"
-        for msg in round_messages
-        if msg.visibility == Visibility.PUBLIC or msg.kind == MessageKind.GM_RULING
-    ]
-    user_prompt = "Round content:\n" + "\n".join(lines)
+
+    system_prompt = (
+        f"You are {agent.name} in a reality show.\n"
+        f"{agent.personality_prompt}\n\n"
+        f"Show premise: {show.show_prompt}\n"
+        f"House rules: {show.rules_text}\n"
+        f"Other housemates: {housemates}"
+        f"{connection_line}\n\n"
+        "Use the tools to act. You may use several in one turn: speak to the "
+        "house, send private messages, and record a confession. If nothing "
+        "here deserves a response, use stay_silent."
+    )
+
+    memory_block = "\n".join(f"- {note}" for note in agent.memory) or "(nothing yet)"
+    batch_block = "\n".join(_format_event(event) for event in batch) or "(nothing new)"
+
+    user_prompt = (
+        f"What you remember so far:\n{memory_block}\n\n"
+        f"What just happened:\n{batch_block}\n\n"
+        f"It is round {show.current_round}. Decide how you want to act."
+    )
     return system_prompt, user_prompt
 
 
-def run_narrator(show: Show, round_messages: list, llm_client) -> str:
-    system_prompt, user_prompt = build_narrator_prompt(show, round_messages)
+def _format_event(event) -> str:
+    if event.kind == EventKind.GM_RULING:
+        return f"[GAME MASTER RULING] {event.text}"
+    if event.kind == EventKind.GM_ANNOUNCEMENT:
+        return f"[GAME MASTER] {event.text}"
+    if event.visibility == Visibility.PRIVATE and not event.released:
+        return f"[PRIVATE from {event.sender_id}] {event.text}"
+    return f"{event.sender_id}: {event.text}"
+
+
+def dispatch_agent_calls(bus, agent, calls) -> int:
+    published = 0
+    for call in calls:
+        name = call["name"]
+        arguments = call.get("arguments", {})
+        if name == "speak_public":
+            bus.publish(agent.id, arguments["text"])
+        elif name == "send_private":
+            bus.publish(agent.id, arguments["text"],
+                        visibility=Visibility.PRIVATE,
+                        recipients=[arguments["to"]])
+        elif name == "confess":
+            bus.publish(agent.id, arguments["text"], kind=EventKind.CONFESSION,
+                        visibility=Visibility.PRIVATE, recipients=[])
+        else:
+            continue
+        published += 1
+    return published
+
+
+def _drain(inbox) -> list:
+    drained = []
+    while not inbox.empty():
+        drained.append(inbox.get_nowait())
+    return drained
+
+
+async def run_agent_loop(show, agent, bus, llm_client, config) -> None:
+    inbox = bus.subscribe(agent.id)
+    try:
+        while agent.actions_remaining > 0:
+            if agent.status == AgentStatus.ELIMINATED:
+                return
+            first = await inbox.get()
+            if config.debounce_seconds:
+                await asyncio.sleep(config.debounce_seconds)
+            batch = [first] + _drain(inbox)
+
+            while agent.status == AgentStatus.PAUSED:
+                await asyncio.sleep(PAUSE_POLL_SECONDS)
+            if agent.status == AgentStatus.ELIMINATED:
+                return
+
+            batch.extend(_drain(inbox))
+            system_prompt, user_prompt = build_agent_prompt(show, agent, batch)
+
+            bus.in_flight += 1
+            try:
+                calls = await asyncio.get_event_loop().run_in_executor(
+                    None, llm_client.complete_with_tools,
+                    system_prompt, user_prompt, AGENT_TOOLS,
+                )
+            finally:
+                bus.in_flight -= 1
+
+            for event in batch:
+                agent.memory.append(_format_event(event))
+            dispatch_agent_calls(bus, agent, calls)
+
+            agent.actions_remaining -= 1
+            if config.cooldown_seconds:
+                await asyncio.sleep(config.cooldown_seconds)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        bus.unsubscribe(agent.id)
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_agent_loop.py -v`
+Expected: 8 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/agent_loop.py backend/tests/test_agent_loop.py
+git commit -m "feat: add concurrent agent loop with debounce, drain, and dispatch"
+```
+
+---
+
+### Task 7: Game Master loop
+
+**Files:**
+- Create: `backend/app/gm_loop.py`
+- Test: `backend/tests/test_gm_loop.py`
+
+**Interfaces:**
+- Consumes `EventBus` (Task 3), `GM_TOOLS` (Task 4), models (Task 1).
+- Produces `build_gm_prompt(show, batch) -> tuple[str, str]` — the GM sees private events and confessions verbatim.
+- Produces `dispatch_gm_calls(show, bus, calls, stop_event) -> None` — `warn` increments `warnings` and sets status WARNED; `eject` sets status ELIMINATED; both publish a public `GM_RULING`. `announce` publishes a public `GM_ANNOUNCEMENT`. `end_round` publishes an announcement and sets `stop_event`.
+- Produces `async def run_gm_loop(show, bus, llm_client, config, stop_event)` — subscribes as `GM_ID`, counts events seen, and thinks once every `config.gm_review_every` events.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/test_gm_loop.py`:
+
+```python
+import asyncio
+
+import pytest
+
+from app.event_bus import EventBus
+from app.gm_loop import build_gm_prompt, dispatch_gm_calls, run_gm_loop
+from app.models import (
+    Agent, AgentStatus, Event, EventKind, RoundConfig, Show, Visibility, GM_ID,
+)
+
+
+def make_show():
+    agents = [
+        Agent(id="vikram", name="Vikram", personality_prompt="p"),
+        Agent(id="meera", name="Meera", personality_prompt="p"),
+    ]
+    return Show(id="s1", title="T", show_prompt="p", gm_prompt="Be fair.",
+                rules_text="No unfounded accusations.", contestants=agents,
+                current_round=1)
+
+
+class FakeLLMClient:
+    def __init__(self, calls_per_wake):
+        self.calls_per_wake = list(calls_per_wake)
+        self.wake_count = 0
+
+    def complete_with_tools(self, system_prompt, user_prompt, tools):
+        self.wake_count += 1
+        if not self.calls_per_wake:
+            return []
+        return self.calls_per_wake.pop(0)
+
+
+def test_build_gm_prompt_shows_private_and_confession_content():
+    show = make_show()
+    batch = [
+        Event(seq=0, round=1, sender_id="vikram", text="Meera is lying."),
+        Event(seq=1, round=1, sender_id="meera", text="Ally with me.",
+              visibility=Visibility.PRIVATE, recipients=["vikram"]),
+        Event(seq=2, round=1, sender_id="meera", text="I am scared.",
+              kind=EventKind.CONFESSION, visibility=Visibility.PRIVATE),
+    ]
+
+    system_prompt, user_prompt = build_gm_prompt(show, batch)
+
+    assert "Be fair." in system_prompt
+    assert "No unfounded accusations." in system_prompt
+    assert "Meera is lying." in user_prompt
+    assert "Ally with me." in user_prompt
+    assert "I am scared." in user_prompt
+
+
+def test_dispatch_warn_marks_agent_and_publishes_public_ruling():
+    show = make_show()
+    bus = EventBus(show)
+    stop_event = asyncio.Event()
+
+    dispatch_gm_calls(show, bus, [
+        {"name": "warn", "arguments": {"agent_id": "vikram", "reason": "No evidence."}},
+    ], stop_event)
+
+    vikram = show.get_agent("vikram")
+    assert vikram.status == AgentStatus.WARNED
+    assert vikram.warnings == 1
+    assert show.events[-1].kind == EventKind.GM_RULING
+    assert show.events[-1].visibility == Visibility.PUBLIC
+    assert show.events[-1].text == "No evidence."
+
+
+def test_dispatch_eject_eliminates_agent():
+    show = make_show()
+    bus = EventBus(show)
+    stop_event = asyncio.Event()
+
+    dispatch_gm_calls(show, bus, [
+        {"name": "eject", "arguments": {"agent_id": "vikram", "reason": "Repeat breach."}},
+    ], stop_event)
+
+    assert show.get_agent("vikram").status == AgentStatus.ELIMINATED
+    assert show.events[-1].kind == EventKind.GM_RULING
+
+
+def test_dispatch_end_round_sets_stop_event():
+    show = make_show()
+    bus = EventBus(show)
+    stop_event = asyncio.Event()
+
+    dispatch_gm_calls(show, bus, [
+        {"name": "end_round", "arguments": {"reason": "The vote is settled."}},
+    ], stop_event)
+
+    assert stop_event.is_set()
+    assert show.events[-1].kind == EventKind.GM_ANNOUNCEMENT
+
+
+@pytest.mark.asyncio
+async def test_run_gm_loop_thinks_only_every_n_events():
+    show = make_show()
+    bus = EventBus(show)
+    stop_event = asyncio.Event()
+    llm_client = FakeLLMClient([])
+    config = RoundConfig(gm_review_every=3)
+
+    task = asyncio.create_task(
+        run_gm_loop(show, bus, llm_client, config, stop_event)
+    )
+    await asyncio.sleep(0)
+    for index in range(3):
+        bus.publish("vikram", f"line {index}")
+    await asyncio.sleep(0.05)
+    stop_event.set()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert llm_client.wake_count == 1
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python -m pytest tests/test_gm_loop.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.gm_loop'`.
+
+- [ ] **Step 3: Implement `backend/app/gm_loop.py`**
+
+```python
+import asyncio
+
+from .models import AgentStatus, EventKind, Visibility, GM_ID
+from .tools import GM_TOOLS
+
+
+def build_gm_prompt(show, batch) -> tuple:
+    roster = ", ".join(
+        f"{a.name} (id: {a.id}, status: {a.status.value}, warnings: {a.warnings})"
+        for a in show.contestants
+    )
+
+    system_prompt = (
+        f"{show.gm_prompt}\n\n"
+        f"Show premise: {show.show_prompt}\n"
+        f"House rules you enforce: {show.rules_text}\n"
+        f"Housemates: {roster}\n\n"
+        "You see everything, including private messages and confessions the "
+        "housemates believe are secret. Use the tools only when action is "
+        "warranted. Doing nothing is usually correct."
+    )
+
+    lines = []
+    for event in batch:
+        if event.kind == EventKind.CONFESSION:
+            lines.append(f"[CONFESSION by {event.sender_id}] {event.text}")
+        elif event.visibility == Visibility.PRIVATE:
+            lines.append(
+                f"[PRIVATE {event.sender_id} -> {event.recipients}] {event.text}"
+            )
+        else:
+            lines.append(f"{event.sender_id}: {event.text}")
+
+    user_prompt = (
+        "Recent activity in the house:\n" + ("\n".join(lines) or "(nothing yet)")
+    )
+    return system_prompt, user_prompt
+
+
+def dispatch_gm_calls(show, bus, calls, stop_event) -> None:
+    for call in calls:
+        name = call["name"]
+        arguments = call.get("arguments", {})
+        if name in ("warn", "eject"):
+            try:
+                agent = show.get_agent(arguments["agent_id"])
+            except KeyError:
+                continue
+            if name == "warn":
+                agent.warnings += 1
+                agent.status = AgentStatus.WARNED
+            else:
+                agent.status = AgentStatus.ELIMINATED
+            bus.publish(GM_ID, arguments["reason"], kind=EventKind.GM_RULING)
+        elif name == "announce":
+            bus.publish(GM_ID, arguments["text"], kind=EventKind.GM_ANNOUNCEMENT)
+        elif name == "end_round":
+            bus.publish(GM_ID, arguments["reason"], kind=EventKind.GM_ANNOUNCEMENT)
+            stop_event.set()
+
+
+def _drain(inbox) -> list:
+    drained = []
+    while not inbox.empty():
+        drained.append(inbox.get_nowait())
+    return drained
+
+
+async def run_gm_loop(show, bus, llm_client, config, stop_event) -> None:
+    inbox = bus.subscribe(GM_ID)
+    seen_since_review = 0
+    try:
+        while not stop_event.is_set():
+            first = await inbox.get()
+            batch = [first] + _drain(inbox)
+            seen_since_review += len(batch)
+            if seen_since_review < config.gm_review_every:
+                continue
+            seen_since_review = 0
+
+            system_prompt, user_prompt = build_gm_prompt(show, batch)
+            bus.in_flight += 1
+            try:
+                calls = await asyncio.get_event_loop().run_in_executor(
+                    None, llm_client.complete_with_tools,
+                    system_prompt, user_prompt, GM_TOOLS,
+                )
+            finally:
+                bus.in_flight -= 1
+
+            dispatch_gm_calls(show, bus, calls, stop_event)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        bus.unsubscribe(GM_ID)
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_gm_loop.py -v`
+Expected: 5 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/gm_loop.py backend/tests/test_gm_loop.py
+git commit -m "feat: add live game master loop with warn, eject, and end round"
+```
+
+---
+
+### Task 8: Narrator
+
+**Files:**
+- Create: `backend/app/narrator.py`
+- Test: `backend/tests/test_narrator.py`
+
+**Interfaces:**
+- Consumes models (Task 1), any client with `.complete()` (Task 5).
+- Produces `build_narrator_prompt(show, events) -> tuple[str, str]` — public events and GM rulings only; unreleased private events and confessions are excluded.
+- Produces `run_narrator(show, events, llm_client) -> str` — stripped recap text.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/test_narrator.py`:
+
+```python
+from app.models import Event, EventKind, Show, Visibility
+from app.narrator import build_narrator_prompt, run_narrator
+
+
+class FakeLLMClient:
+    def __init__(self, text):
+        self.text = text
+
+    def complete(self, system_prompt, user_prompt):
+        return self.text
+
+
+def make_show():
+    return Show(id="s1", title="T", show_prompt="p", gm_prompt="g",
+                rules_text="r", current_round=1)
+
+
+def test_narrator_prompt_excludes_unreleased_private_and_confessions():
+    show = make_show()
+    events = [
+        Event(seq=0, round=1, sender_id="vikram", text="I trust no one."),
+        Event(seq=1, round=1, sender_id="meera", text="Secret alliance plan.",
+              visibility=Visibility.PRIVATE, recipients=["vikram"]),
+        Event(seq=2, round=1, sender_id="meera", text="I am terrified.",
+              kind=EventKind.CONFESSION, visibility=Visibility.PRIVATE),
+        Event(seq=3, round=1, sender_id="game_master", text="Vikram warned.",
+              kind=EventKind.GM_RULING),
+    ]
+
+    _, user_prompt = build_narrator_prompt(show, events)
+
+    assert "I trust no one." in user_prompt
+    assert "Vikram warned." in user_prompt
+    assert "Secret alliance plan." not in user_prompt
+    assert "I am terrified." not in user_prompt
+
+
+def test_narrator_prompt_includes_released_private_event():
+    show = make_show()
+    events = [
+        Event(seq=0, round=1, sender_id="meera", text="Leaked plan.",
+              visibility=Visibility.PRIVATE, recipients=["vikram"], released=True),
+    ]
+    _, user_prompt = build_narrator_prompt(show, events)
+    assert "Leaked plan." in user_prompt
+
+
+def test_narrator_prompt_carries_the_one_good_deed_rule():
+    show = make_show()
+    system_prompt, _ = build_narrator_prompt(show, [])
+    assert "act of kindness" in system_prompt.lower()
+
+
+def test_run_narrator_strips_whitespace():
+    show = make_show()
+    assert run_narrator(show, [], FakeLLMClient("  A tense round.  \n")) == "A tense round."
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python -m pytest tests/test_narrator.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.narrator'`.
+
+- [ ] **Step 3: Implement `backend/app/narrator.py`**
+
+```python
+from .models import EventKind, Visibility
+
+
+def build_narrator_prompt(show, events) -> tuple:
+    system_prompt = (
+        "You are the narrator of a reality show. Write a short third-person "
+        "recap paragraph, three to five sentences, of this round for the "
+        "viewing audience. Do not invent facts that are not in the round "
+        "content. No matter how hostile the round was, find and highlight at "
+        "least one authentic act of kindness, courage, or loyalty from what "
+        "actually happened. Do not fabricate one if there genuinely was none."
+    )
+
+    lines = []
+    for event in events:
+        if event.kind == EventKind.CONFESSION:
+            continue
+        if event.visibility == Visibility.PRIVATE and not event.released:
+            continue
+        lines.append(f"{event.sender_id}: {event.text}")
+
+    user_prompt = (
+        f"Round {show.current_round} content:\n"
+        + ("\n".join(lines) or "(the house was silent)")
+    )
+    return system_prompt, user_prompt
+
+
+def run_narrator(show, events, llm_client) -> str:
+    system_prompt, user_prompt = build_narrator_prompt(show, events)
     return llm_client.complete(system_prompt, user_prompt).strip()
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_narrator_runner.py -v`
-Expected: 3 passed.
+Run: `python -m pytest tests/test_narrator.py -v`
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/app/narrator_runner.py backend/tests/test_narrator_runner.py
-git commit -m "feat: add narrator runner for round recap generation"
+git add backend/app/narrator.py backend/tests/test_narrator.py
+git commit -m "feat: add narrator with visibility filtering and good deed rule"
 ```
 
 ---
 
-### Task 7: Show store (in-memory registry + JSON snapshot)
+### Task 9: Show store
 
 **Files:**
 - Create: `backend/app/store.py`
 - Test: `backend/tests/test_store.py`
 
 **Interfaces:**
-- Consumes: `Show` from `app.models`.
-- Produces: `ShowStore(snapshot_dir: str)` with `.add(show: Show) -> None`, `.get(show_id: str) -> Show` (raises `KeyError` if missing), `.snapshot(show_id: str) -> None` (writes `{snapshot_dir}/{show_id}.json`).
+- Produces `ShowStore(snapshot_dir="snapshots")` with `.add(show)`, `.get(show_id)` (raises `KeyError`), `.snapshot(show_id)` writing `{snapshot_dir}/{show_id}.json`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1020,29 +1717,32 @@ from app.models import Show
 from app.store import ShowStore
 
 
-def test_add_and_get_show():
-    store = ShowStore(snapshot_dir="/tmp/does-not-need-to-exist-yet")
-    show = Show(id="s1", title="Test", show_prompt="p", gm_prompt="g", rules_text="r")
+def make_show():
+    return Show(id="s1", title="T", show_prompt="p", gm_prompt="g", rules_text="r")
+
+
+def test_add_and_get(tmp_path):
+    store = ShowStore(snapshot_dir=str(tmp_path))
+    show = make_show()
     store.add(show)
     assert store.get("s1") is show
 
 
-def test_get_missing_show_raises():
-    store = ShowStore(snapshot_dir="/tmp/does-not-need-to-exist-yet")
+def test_get_missing_raises(tmp_path):
+    store = ShowStore(snapshot_dir=str(tmp_path))
     with pytest.raises(KeyError):
         store.get("missing")
 
 
-def test_snapshot_writes_json_matching_to_dict(tmp_path):
+def test_snapshot_writes_show_to_dict(tmp_path):
     store = ShowStore(snapshot_dir=str(tmp_path))
-    show = Show(id="s1", title="Test", show_prompt="p", gm_prompt="g", rules_text="r")
+    show = make_show()
     store.add(show)
 
     store.snapshot("s1")
 
-    snapshot_path = tmp_path / "s1.json"
-    assert snapshot_path.exists()
-    assert json.loads(snapshot_path.read_text()) == show.to_dict()
+    written = json.loads((tmp_path / "s1.json").read_text())
+    assert written == show.to_dict()
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1056,8 +1756,6 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'app.store'`.
 import json
 from pathlib import Path
 
-from .models import Show
-
 
 class ShowStore:
     def __init__(self, snapshot_dir: str = "snapshots"):
@@ -1065,10 +1763,10 @@ class ShowStore:
         self.snapshot_dir = Path(snapshot_dir)
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
 
-    def add(self, show: Show) -> None:
+    def add(self, show) -> None:
         self.shows[show.id] = show
 
-    def get(self, show_id: str) -> Show:
+    def get(self, show_id: str):
         if show_id not in self.shows:
             raise KeyError(f"No show with id {show_id}")
         return self.shows[show_id]
@@ -1093,418 +1791,427 @@ git commit -m "feat: add in-memory show store with JSON snapshotting"
 
 ---
 
-### Task 8: Round orchestrator
+### Task 10: Round supervisor and end watcher
 
 **Files:**
-- Create: `backend/app/orchestrator.py`
-- Test: `backend/tests/test_orchestrator.py`
+- Create: `backend/app/supervisor.py`
+- Test: `backend/tests/test_supervisor.py`
 
 **Interfaces:**
-- Consumes: `run_agent_turn` (Task 4), `run_gm_review` (Task 5), `run_narrator` (Task 6), `Show`, `Message`, `MessageKind`, `Visibility`, `AgentStatus`, `RoundLog` (Task 1), `ShowStore` (Task 7, optional).
-- Produces: `async def advance_round(show: Show, llm_client, store=None) -> RoundLog`. This is what Task 9's `/shows/{id}/advance` route calls directly (`await advance_round(...)`). Besides the public action and any private DMs, each agent's `result["confession"]` (Task 4) — if non-empty — becomes its own `Message` with `visibility=Visibility.PRIVATE` and `recipients=[]` (a Confession Booth entry: visible to the sender and to viewers, never to other agents, unless later released via Task 9's `/release` route).
-- Concurrency note: `run_agent_turn` is synchronous (it makes a blocking HTTP call via the LLM client); `advance_round` runs each active agent's turn in a thread-pool executor via `asyncio.gather` so all active agents' calls are in flight at once, and none can observe another's result before every call returns.
+- Consumes `run_agent_loop` (Task 6), `run_gm_loop` (Task 7), `run_narrator` (Task 8), `EventBus` (Task 3), `ShowStore` (Task 9), models (Task 1).
+- Produces `async def watch_for_end(show, bus, config, stop_event, started_at)` — polls every 250ms and sets `stop_event` on wall-clock timeout, all budgets exhausted, or true quiescence (no new events for `quiescence_seconds` **and** `bus.in_flight == 0` **and** `bus.all_inboxes_empty()`).
+- Produces `async def run_round(show, bus, llm_client, config, store=None, stop_event=None) -> str` — increments the round, resets budgets, spawns agent and GM tasks, publishes the GM kickoff announcement, awaits `stop_event`, cancels tasks, runs the narrator, stores the narrative, snapshots, and returns the narrative. Accepting an externally supplied `stop_event` is what makes the producer-stop route in Task 11 possible.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `backend/tests/test_orchestrator.py`:
-
-```python
-import json
-
-import pytest
-
-from app.models import Agent, AgentStatus, MessageKind, Show, Visibility
-from app.orchestrator import advance_round
-
-
-class ScriptedLLMClient:
-    """Returns different canned JSON depending on which runner is calling,
-    detected by a marker unique to each runner's system prompt."""
-
-    def complete(self, system_prompt, user_prompt):
-        if "rulings" in system_prompt:
-            return json.dumps({"rulings": []})
-        if "public_action" in system_prompt:
-            return json.dumps({
-                "public_action": "I'm staying quiet this round.",
-                "private_messages": [],
-                "leak_message_ids": [],
-            })
-        return "The house was quiet this round."
-
-
-def make_show():
-    vex = Agent(id="vex", name="Vex", personality_prompt="Be ruthless.")
-    mira = Agent(id="mira", name="Mira", personality_prompt="Keep the peace.")
-    return Show(id="s1", title="Test", show_prompt="p", gm_prompt="g", rules_text="r",
-                contestants=[vex, mira])
-
-
-@pytest.mark.asyncio
-async def test_advance_round_runs_active_agents_and_appends_round_log():
-    show = make_show()
-    llm_client = ScriptedLLMClient()
-
-    round_log = await advance_round(show, llm_client)
-
-    assert show.current_round == 1
-    assert round_log.round_number == 1
-    action_messages = [m for m in round_log.messages if m.kind == MessageKind.ACTION]
-    assert len(action_messages) == 2
-    assert {m.sender_id for m in action_messages} == {"vex", "mira"}
-    assert round_log.narrative == "The house was quiet this round."
-    assert show.round_logs == [round_log]
-
-
-@pytest.mark.asyncio
-async def test_advance_round_skips_eliminated_agents():
-    show = make_show()
-    show.get_agent("mira").status = AgentStatus.ELIMINATED
-    llm_client = ScriptedLLMClient()
-
-    round_log = await advance_round(show, llm_client)
-
-    senders = {m.sender_id for m in round_log.messages if m.kind == MessageKind.ACTION}
-    assert senders == {"vex"}
-
-
-@pytest.mark.asyncio
-async def test_advance_round_records_confession_as_recipientless_private_message():
-    show = make_show()
-
-    class ConfessingClient:
-        def complete(self, system_prompt, user_prompt):
-            if "rulings" in system_prompt:
-                return json.dumps({"rulings": []})
-            if "public_action" not in system_prompt:
-                return "recap"
-            return json.dumps({
-                "public_action": "Staying neutral.",
-                "private_messages": [],
-                "leak_message_ids": [],
-                "confession": "I don't trust Mira at all.",
-            })
-
-    round_log = await advance_round(show, ConfessingClient())
-
-    confessions = [
-        m for m in round_log.messages
-        if m.visibility == Visibility.PRIVATE and m.recipients == []
-    ]
-    assert len(confessions) == 2
-    assert {m.text for m in confessions} == {"I don't trust Mira at all."}
-
-
-@pytest.mark.asyncio
-async def test_advance_round_files_private_messages_and_releases_leaks():
-    show = make_show()
-
-    class OneRoundClient:
-        def __init__(self):
-            self.call_count = 0
-
-        def complete(self, system_prompt, user_prompt):
-            if "rulings" in system_prompt:
-                return json.dumps({"rulings": []})
-            if "public_action" not in system_prompt:
-                return "recap"
-            self.call_count += 1
-            if self.call_count == 1:
-                return json.dumps({
-                    "public_action": "Staying neutral.",
-                    "private_messages": [{"to": "mira", "text": "Let's team up."}],
-                    "leak_message_ids": [],
-                })
-            return json.dumps({
-                "public_action": "Staying neutral too.",
-                "private_messages": [],
-                "leak_message_ids": [],
-            })
-
-    round_log = await advance_round(show, OneRoundClient())
-
-    private_messages = [m for m in round_log.messages if m.visibility == Visibility.PRIVATE]
-    assert len(private_messages) == 1
-    assert private_messages[0].recipients == ["mira"]
-    assert private_messages[0].released is False
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `python -m pytest tests/test_orchestrator.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'app.orchestrator'`.
-
-- [ ] **Step 3: Implement `backend/app/orchestrator.py`**
+Create `backend/tests/test_supervisor.py`:
 
 ```python
 import asyncio
 
-from .models import AgentStatus, Message, MessageKind, RoundLog, Show, Visibility
-from .agent_runner import run_agent_turn
-from .gm_runner import run_gm_review
-from .narrator_runner import run_narrator
+import pytest
+
+from app.event_bus import EventBus
+from app.models import Agent, AgentStatus, EventKind, RoundConfig, Show
+from app.supervisor import run_round, watch_for_end
 
 
-async def advance_round(show: Show, llm_client, store=None) -> RoundLog:
-    show.current_round += 1
-    active_agents = [
-        a for a in show.contestants
-        if a.status in (AgentStatus.ACTIVE, AgentStatus.WARNED)
+def make_show():
+    agents = [
+        Agent(id="vikram", name="Vikram", personality_prompt="p"),
+        Agent(id="meera", name="Meera", personality_prompt="p"),
     ]
+    return Show(id="s1", title="T", show_prompt="p", gm_prompt="g",
+                rules_text="r", contestants=agents)
 
+
+def fast_config(**overrides):
+    defaults = dict(
+        action_budget=1, debounce_seconds=0.0, cooldown_seconds=0.0,
+        quiescence_seconds=0.1, round_timeout_seconds=5.0, gm_review_every=100,
+    )
+    defaults.update(overrides)
+    return RoundConfig(**defaults)
+
+
+class SilentClient:
+    """Agents stay silent; narrator returns a fixed recap."""
+
+    def complete_with_tools(self, system_prompt, user_prompt, tools):
+        return []
+
+    def complete(self, system_prompt, user_prompt):
+        return "A quiet round in the house."
+
+
+class TalkativeClient:
+    def complete_with_tools(self, system_prompt, user_prompt, tools):
+        return [{"name": "speak_public", "arguments": {"text": "I am here."}}]
+
+    def complete(self, system_prompt, user_prompt):
+        return "Everyone spoke up."
+
+
+@pytest.mark.asyncio
+async def test_run_round_publishes_kickoff_and_runs_agents():
+    show = make_show()
+    bus = EventBus(show)
+
+    narrative = await asyncio.wait_for(
+        run_round(show, bus, TalkativeClient(), fast_config()), timeout=10
+    )
+
+    assert show.current_round == 1
+    assert show.events[0].kind == EventKind.GM_ANNOUNCEMENT
+    spoken = [e.text for e in show.events if e.sender_id in ("vikram", "meera")]
+    assert spoken == ["I am here.", "I am here."]
+    assert narrative == "Everyone spoke up."
+    assert show.narratives[1] == "Everyone spoke up."
+
+
+@pytest.mark.asyncio
+async def test_run_round_ends_on_quiescence_when_agents_stay_silent():
+    show = make_show()
+    bus = EventBus(show)
+
+    narrative = await asyncio.wait_for(
+        run_round(show, bus, SilentClient(), fast_config(action_budget=5)),
+        timeout=10,
+    )
+
+    assert narrative == "A quiet round in the house."
+
+
+@pytest.mark.asyncio
+async def test_run_round_resets_action_budget_for_active_agents_only():
+    show = make_show()
+    show.get_agent("meera").status = AgentStatus.ELIMINATED
+    bus = EventBus(show)
+
+    await asyncio.wait_for(
+        run_round(show, bus, SilentClient(), fast_config(action_budget=3)),
+        timeout=10,
+    )
+
+    assert show.get_agent("meera").actions_remaining == 0
+    assert show.get_agent("meera").status == AgentStatus.ELIMINATED
+
+
+@pytest.mark.asyncio
+async def test_run_round_snapshots_when_store_given(tmp_path):
+    from app.store import ShowStore
+
+    show = make_show()
+    bus = EventBus(show)
+    store = ShowStore(snapshot_dir=str(tmp_path))
+    store.add(show)
+
+    await asyncio.wait_for(
+        run_round(show, bus, SilentClient(), fast_config(), store=store), timeout=10
+    )
+
+    assert (tmp_path / "s1.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_external_stop_event_ends_the_round():
+    show = make_show()
+    bus = EventBus(show)
+    stop_event = asyncio.Event()
+
+    async def stop_soon():
+        await asyncio.sleep(0.05)
+        stop_event.set()
+
+    asyncio.create_task(stop_soon())
+    await asyncio.wait_for(
+        run_round(show, bus, SilentClient(),
+                  fast_config(quiescence_seconds=30.0, round_timeout_seconds=30.0),
+                  stop_event=stop_event),
+        timeout=10,
+    )
+
+    assert show.current_round == 1
+
+
+@pytest.mark.asyncio
+async def test_watch_for_end_does_not_fire_quiescence_while_calls_in_flight():
+    show = make_show()
+    for agent in show.contestants:
+        agent.actions_remaining = 5   # keep the budget rail from firing first
+    bus = EventBus(show)
+    stop_event = asyncio.Event()
+    bus.in_flight = 1
+
+    watcher = asyncio.create_task(
+        watch_for_end(show, bus, fast_config(quiescence_seconds=0.05),
+                      stop_event, asyncio.get_event_loop().time())
+    )
+    await asyncio.sleep(0.3)
+    still_running = not stop_event.is_set()
+
+    bus.in_flight = 0
+    await asyncio.sleep(0.3)
+    fired_after_settling = stop_event.is_set()
+
+    watcher.cancel()
+    await asyncio.gather(watcher, return_exceptions=True)
+
+    assert still_running is True
+    assert fired_after_settling is True
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python -m pytest tests/test_supervisor.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'app.supervisor'`.
+
+- [ ] **Step 3: Implement `backend/app/supervisor.py`**
+
+```python
+import asyncio
+
+from .agent_loop import run_agent_loop
+from .gm_loop import run_gm_loop
+from .models import EventKind, GM_ID
+from .narrator import run_narrator
+
+WATCH_POLL_SECONDS = 0.25
+
+
+async def watch_for_end(show, bus, config, stop_event, started_at) -> None:
     loop = asyncio.get_event_loop()
-    results = await asyncio.gather(*[
-        loop.run_in_executor(None, run_agent_turn, show, agent, llm_client)
-        for agent in active_agents
-    ])
+    last_event_count = len(show.events)
+    last_change_at = loop.time()
 
-    round_messages = []
-    for agent, result in zip(active_agents, results):
-        round_messages.append(Message(
-            id=f"r{show.current_round}-{agent.id}",
-            round=show.current_round,
-            sender_id=agent.id,
-            text=result["public_action"],
-            kind=MessageKind.ACTION,
-            visibility=Visibility.PUBLIC,
-        ))
-        for i, pm in enumerate(result["private_messages"]):
-            round_messages.append(Message(
-                id=f"r{show.current_round}-{agent.id}-dm{i}",
-                round=show.current_round,
-                sender_id=agent.id,
-                text=pm["text"],
-                kind=MessageKind.ACTION,
-                visibility=Visibility.PRIVATE,
-                recipients=[pm["to"]],
-            ))
-        for leaked_id in result["leak_message_ids"]:
-            for log in show.round_logs:
-                for msg in log.messages:
-                    if msg.id == leaked_id:
-                        msg.released = True
-        if result["confession"]:
-            round_messages.append(Message(
-                id=f"r{show.current_round}-{agent.id}-confession",
-                round=show.current_round,
-                sender_id=agent.id,
-                text=result["confession"],
-                kind=MessageKind.ACTION,
-                visibility=Visibility.PRIVATE,
-                recipients=[],
-            ))
+    try:
+        while not stop_event.is_set():
+            await asyncio.sleep(WATCH_POLL_SECONDS)
+            now = loop.time()
 
-    gm_rulings = run_gm_review(show, round_messages, llm_client)
-    round_messages.extend(gm_rulings)
+            if now - started_at > config.round_timeout_seconds:
+                stop_event.set()
+                return
 
-    narrative = run_narrator(show, round_messages, llm_client)
+            active = show.active_agents()
+            if active and all(a.actions_remaining <= 0 for a in active):
+                stop_event.set()
+                return
 
-    round_log = RoundLog(round_number=show.current_round, messages=round_messages,
-                          narrative=narrative)
-    show.round_logs.append(round_log)
+            if len(show.events) != last_event_count:
+                last_event_count = len(show.events)
+                last_change_at = now
+                continue
+
+            settled = bus.in_flight == 0 and bus.all_inboxes_empty()
+            if settled and now - last_change_at > config.quiescence_seconds:
+                stop_event.set()
+                return
+    except asyncio.CancelledError:
+        pass
+
+
+async def run_round(show, bus, llm_client, config, store=None,
+                    stop_event=None) -> str:
+    show.current_round += 1
+    active = show.active_agents()
+    for agent in active:
+        agent.actions_remaining = config.action_budget
+
+    stop_event = stop_event or asyncio.Event()
+    loop = asyncio.get_event_loop()
+
+    agent_tasks = [
+        asyncio.create_task(run_agent_loop(show, agent, bus, llm_client, config))
+        for agent in active
+    ]
+    gm_task = asyncio.create_task(
+        run_gm_loop(show, bus, llm_client, config, stop_event)
+    )
+    await asyncio.sleep(0)
+
+    bus.publish(
+        GM_ID,
+        f"Round {show.current_round} begins. The house is open.",
+        kind=EventKind.GM_ANNOUNCEMENT,
+    )
+
+    watcher = asyncio.create_task(
+        watch_for_end(show, bus, config, stop_event, loop.time())
+    )
+
+    await stop_event.wait()
+
+    for task in agent_tasks + [gm_task, watcher]:
+        task.cancel()
+    await asyncio.gather(*agent_tasks, gm_task, watcher, return_exceptions=True)
+
+    narrative = run_narrator(
+        show, show.events_for_round(show.current_round), llm_client
+    )
+    show.narratives[show.current_round] = narrative
 
     if store is not None:
         store.snapshot(show.id)
 
-    return round_log
+    return narrative
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_orchestrator.py -v`
-Expected: 4 passed.
+Run: `python -m pytest tests/test_supervisor.py -v`
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/app/orchestrator.py backend/tests/test_orchestrator.py
-git commit -m "feat: add round orchestrator tying agent, GM, and narrator runners together"
+git add backend/app/supervisor.py backend/tests/test_supervisor.py
+git commit -m "feat: add round supervisor with budget, quiescence, and timeout end conditions"
 ```
 
 ---
 
-### Task 9: FastAPI routes
+### Task 11: FastAPI routes, WebSocket streaming, entrypoint
 
 **Files:**
-- Create: `backend/app/api.py`
+- Create: `backend/app/api.py`, `backend/app/main.py`
 - Test: `backend/tests/test_api.py`
 
 **Interfaces:**
-- Consumes: `Show`, `Agent`, `AgentStatus`, `ShowStatus` (Task 1); `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT`, `PRESET_AGENT_PERSONALITIES`, `build_preset_agent` (Task 2); `ShowStore` (Task 7); `advance_round` (Task 8).
-- Produces: `create_app(store: ShowStore, llm_client) -> FastAPI` with routes:
-  - `POST /shows` — body `{title, show_prompt?, gm_prompt?, rules_text?, max_rounds?, secret_connections?: [{agent_a, agent_b, connection_note}], agent_preset_ids: [str] * 5}` → `Show.to_dict()`, `400` if `agent_preset_ids` length != 5. `max_rounds` is optional (omit or `null` = unlimited, producer ends manually). `secret_connections` is optional — each entry sets a symmetric Mirror Pair between two of the five chosen agents (both get `connected_to`/`connection_note` set to each other).
+- Consumes everything above.
+- Produces `create_app(store, llm_client, config=None) -> FastAPI` with:
+  - `POST /shows` — body `{title, show_prompt?, gm_prompt?, rules_text?, max_rounds?, secret_connections?, agent_preset_ids: [str] * 5}` → `Show.to_dict()`; `400` unless exactly 5 preset ids. Each `secret_connections` entry `{agent_a, agent_b, connection_note}` sets a symmetric Mirror Pair.
   - `GET /shows/{show_id}` → `Show.to_dict()`.
-  - `POST /shows/{show_id}/advance` → `RoundLog.to_dict()`, `409` if `show.max_rounds` is set and `show.current_round` has already reached it (and sets `show.status = ShowStatus.ENDED` at that point).
+  - `POST /shows/{show_id}/rounds` → runs one round to completion, returns `{"round": int, "narrative": str}`; `409` if `max_rounds` already reached, which also sets status ENDED.
+  - `POST /shows/{show_id}/stop` → sets the active round's stop event, returns `{"stopped": bool}`.
   - `POST /shows/{show_id}/agents/{agent_id}/pause|resume|kill` → `Agent.to_dict()`.
-  - `POST /shows/{show_id}/messages/{message_id}/release` → `Message.to_dict()` with `released` forced to `True` — this is the Judge/Audience Wildcard "reveal a secret" power: the producer can release any private message (a DM or a confession) into the public log without an agent having to choose to leak it. `404` if `message_id` isn't found in any of the show's round logs.
-- This is the seam the frontend (Tasks 11-13) calls over HTTP.
+  - `POST /shows/{show_id}/events/{seq}/release` → `Event.to_dict()` with `released=True`; `404` if no such seq.
+  - `WS /ws/{show_id}` — every event published during a round is pushed unfiltered as it happens.
+- Produces `backend/app/main.py` wiring a real `OpenAILLMClient` and `ShowStore("snapshots")` for `uvicorn app.main:app`.
 
 - [ ] **Step 1: Write the failing test**
 
 Create `backend/tests/test_api.py`:
 
 ```python
-import json
-
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from app.models import RoundConfig
 from app.store import ShowStore
 
+FIVE = ["strategist", "diplomat", "loyalist", "operator", "wildcard"]
 
-class FakeLLMClient:
+
+class TalkativeClient:
+    def complete_with_tools(self, system_prompt, user_prompt, tools):
+        return [{"name": "speak_public", "arguments": {"text": "I am here."}}]
+
     def complete(self, system_prompt, user_prompt):
-        if "rulings" in system_prompt:
-            return json.dumps({"rulings": []})
-        if "public_action" in system_prompt:
-            return json.dumps({
-                "public_action": "Playing it safe.",
-                "private_messages": [],
-                "leak_message_ids": [],
-            })
-        return "A quiet round."
+        return "A lively round."
+
+
+def fast_config():
+    return RoundConfig(
+        action_budget=1, debounce_seconds=0.0, cooldown_seconds=0.0,
+        quiescence_seconds=0.1, round_timeout_seconds=5.0, gm_review_every=100,
+    )
 
 
 def make_client(tmp_path):
     store = ShowStore(snapshot_dir=str(tmp_path))
-    app = create_app(store, FakeLLMClient())
+    app = create_app(store, TalkativeClient(), fast_config())
     return TestClient(app), store
+
+
+def create_show(client, **overrides):
+    body = {"title": "Sheesha Ghar", "agent_preset_ids": FIVE}
+    body.update(overrides)
+    return client.post("/shows", json=body)
 
 
 def test_create_show_requires_exactly_five_agents(tmp_path):
     client, _ = make_client(tmp_path)
-    response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat"],
-    })
+    response = create_show(client, agent_preset_ids=["strategist"])
     assert response.status_code == 400
 
 
-def test_create_show_with_five_agents_returns_show(tmp_path):
+def test_create_show_returns_running_show_with_five_contestants(tmp_path):
     client, _ = make_client(tmp_path)
-    response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    assert response.status_code == 200
-    data = response.json()
+    data = create_show(client).json()
     assert len(data["contestants"]) == 5
     assert data["status"] == "running"
 
 
-def test_get_show_returns_created_show(tmp_path):
+def test_secret_connections_are_applied_symmetrically(tmp_path):
     client, _ = make_client(tmp_path)
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
+    data = create_show(client, secret_connections=[
+        {"agent_a": "strategist", "agent_b": "diplomat",
+         "connection_note": "Former business partners."},
+    ]).json()
 
-    response = client.get(f"/shows/{show_id}")
-
-    assert response.status_code == 200
-    assert response.json()["id"] == show_id
-
-
-def test_advance_round_returns_round_log(tmp_path):
-    client, _ = make_client(tmp_path)
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
-
-    response = client.post(f"/shows/{show_id}/advance")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["round_number"] == 1
-    assert data["narrative"] == "A quiet round."
-
-
-def test_advance_round_rejected_once_max_rounds_reached(tmp_path):
-    client, _ = make_client(tmp_path)
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "max_rounds": 1,
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
-
-    first = client.post(f"/shows/{show_id}/advance")
-    assert first.status_code == 200
-
-    second = client.post(f"/shows/{show_id}/advance")
-    assert second.status_code == 409
-
-    show_state = client.get(f"/shows/{show_id}").json()
-    assert show_state["status"] == "ended"
-
-
-def test_create_show_applies_secret_connections_symmetrically(tmp_path):
-    client, _ = make_client(tmp_path)
-    response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-        "secret_connections": [
-            {"agent_a": "strategist", "agent_b": "diplomat", "connection_note": "Former business partners."},
-        ],
-    })
-    data = response.json()
     contestants = {c["id"]: c for c in data["contestants"]}
     assert contestants["strategist"]["connected_to"] == "diplomat"
-    assert contestants["strategist"]["connection_note"] == "Former business partners."
     assert contestants["diplomat"]["connected_to"] == "strategist"
     assert contestants["diplomat"]["connection_note"] == "Former business partners."
 
 
-def test_release_message_marks_it_released(tmp_path):
-    client, store = make_client(tmp_path)
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
-    client.post(f"/shows/{show_id}/advance")
-    show = store.get(show_id)
-    message_id = show.round_logs[0].messages[0].id
+def test_run_round_returns_narrative(tmp_path):
+    client, _ = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
 
-    response = client.post(f"/shows/{show_id}/messages/{message_id}/release")
+    response = client.post(f"/shows/{show_id}/rounds")
 
     assert response.status_code == 200
-    assert response.json()["released"] is True
-    assert show.round_logs[0].messages[0].released is True
+    assert response.json() == {"round": 1, "narrative": "A lively round."}
 
 
-def test_release_message_missing_id_returns_404(tmp_path):
+def test_round_limit_is_enforced(tmp_path):
     client, _ = make_client(tmp_path)
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
+    show_id = create_show(client, max_rounds=1).json()["id"]
 
-    response = client.post(f"/shows/{show_id}/messages/does-not-exist/release")
-
-    assert response.status_code == 404
+    assert client.post(f"/shows/{show_id}/rounds").status_code == 200
+    assert client.post(f"/shows/{show_id}/rounds").status_code == 409
+    assert client.get(f"/shows/{show_id}").json()["status"] == "ended"
 
 
 def test_pause_resume_kill_agent(tmp_path):
     client, _ = make_client(tmp_path)
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
+    show_id = create_show(client).json()["id"]
 
-    pause_response = client.post(f"/shows/{show_id}/agents/strategist/pause")
-    assert pause_response.json()["status"] == "paused"
+    assert client.post(f"/shows/{show_id}/agents/strategist/pause").json()["status"] == "paused"
+    assert client.post(f"/shows/{show_id}/agents/strategist/resume").json()["status"] == "active"
+    assert client.post(f"/shows/{show_id}/agents/strategist/kill").json()["status"] == "eliminated"
 
-    resume_response = client.post(f"/shows/{show_id}/agents/strategist/resume")
-    assert resume_response.json()["status"] == "active"
 
-    kill_response = client.post(f"/shows/{show_id}/agents/strategist/kill")
-    assert kill_response.json()["status"] == "eliminated"
+def test_release_event_marks_it_released(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    client.post(f"/shows/{show_id}/rounds")
+
+    response = client.post(f"/shows/{show_id}/events/0/release")
+
+    assert response.status_code == 200
+    assert response.json()["released"] is True
+    assert store.get(show_id).events[0].released is True
+
+
+def test_release_missing_event_returns_404(tmp_path):
+    client, _ = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+    assert client.post(f"/shows/{show_id}/events/999/release").status_code == 404
+
+
+def test_websocket_streams_events_during_a_round(tmp_path):
+    client, _ = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+
+    with client.websocket_connect(f"/ws/{show_id}") as websocket:
+        client.post(f"/shows/{show_id}/rounds")
+        first = websocket.receive_json()
+
+    assert first["kind"] == "gm_announcement"
+    assert first["seq"] == 0
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1515,219 +2222,17 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'app.api'`.
 - [ ] **Step 3: Implement `backend/app/api.py`**
 
 ```python
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+import asyncio
 
-from .models import Show, AgentStatus, ShowStatus
-from .presets import DEFAULT_SHOW_PROMPT, DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, build_preset_agent
-from .store import ShowStore
-from .orchestrator import advance_round
-
-
-class SecretConnection(BaseModel):
-    agent_a: str
-    agent_b: str
-    connection_note: str
-
-
-class CreateShowRequest(BaseModel):
-    title: str
-    show_prompt: str = DEFAULT_SHOW_PROMPT
-    gm_prompt: str = DEFAULT_GM_PROMPT
-    rules_text: str = DEFAULT_RULES_TEXT
-    max_rounds: int = None
-    secret_connections: list = []
-    agent_preset_ids: list
-
-
-def create_app(store: ShowStore, llm_client) -> FastAPI:
-    app = FastAPI()
-
-    @app.post("/shows")
-    def create_show(req: CreateShowRequest):
-        if len(req.agent_preset_ids) != 5:
-            raise HTTPException(400, "Must pick exactly 5 agents")
-        show_id = req.title.lower().replace(" ", "-")
-        show = Show(
-            id=show_id,
-            title=req.title,
-            show_prompt=req.show_prompt,
-            gm_prompt=req.gm_prompt,
-            rules_text=req.rules_text,
-            max_rounds=req.max_rounds,
-            contestants=[build_preset_agent(pid) for pid in req.agent_preset_ids],
-            status=ShowStatus.RUNNING,
-        )
-        for connection in req.secret_connections:
-            agent_a = show.get_agent(connection["agent_a"])
-            agent_b = show.get_agent(connection["agent_b"])
-            agent_a.connected_to = agent_b.id
-            agent_a.connection_note = connection["connection_note"]
-            agent_b.connected_to = agent_a.id
-            agent_b.connection_note = connection["connection_note"]
-        store.add(show)
-        return show.to_dict()
-
-    @app.get("/shows/{show_id}")
-    def get_show(show_id: str):
-        return store.get(show_id).to_dict()
-
-    @app.post("/shows/{show_id}/advance")
-    async def advance(show_id: str):
-        show = store.get(show_id)
-        if show.max_rounds is not None and show.current_round >= show.max_rounds:
-            show.status = ShowStatus.ENDED
-            raise HTTPException(409, "Show has reached its round limit")
-        round_log = await advance_round(show, llm_client, store)
-        if show.max_rounds is not None and show.current_round >= show.max_rounds:
-            show.status = ShowStatus.ENDED
-        return round_log.to_dict()
-
-    @app.post("/shows/{show_id}/agents/{agent_id}/pause")
-    def pause_agent(show_id: str, agent_id: str):
-        agent = store.get(show_id).get_agent(agent_id)
-        agent.status = AgentStatus.PAUSED
-        return agent.to_dict()
-
-    @app.post("/shows/{show_id}/agents/{agent_id}/resume")
-    def resume_agent(show_id: str, agent_id: str):
-        agent = store.get(show_id).get_agent(agent_id)
-        agent.status = AgentStatus.ACTIVE
-        return agent.to_dict()
-
-    @app.post("/shows/{show_id}/agents/{agent_id}/kill")
-    def kill_agent(show_id: str, agent_id: str):
-        agent = store.get(show_id).get_agent(agent_id)
-        agent.status = AgentStatus.ELIMINATED
-        return agent.to_dict()
-
-    @app.post("/shows/{show_id}/messages/{message_id}/release")
-    def release_message(show_id: str, message_id: str):
-        show = store.get(show_id)
-        for log in show.round_logs:
-            for message in log.messages:
-                if message.id == message_id:
-                    message.released = True
-                    return message.to_dict()
-        raise HTTPException(404, "No message with that id")
-
-    return app
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `python -m pytest tests/test_api.py -v`
-Expected: 9 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add backend/app/api.py backend/tests/test_api.py
-git commit -m "feat: add FastAPI routes for show lifecycle and agent controls"
-```
-
----
-
-### Task 10: WebSocket broadcast + process entrypoint
-
-**Files:**
-- Create: `backend/app/ws.py`
-- Modify: `backend/app/api.py` (add `/ws/{show_id}` route and broadcast call in `advance`)
-- Create: `backend/app/main.py`
-- Test: `backend/tests/test_ws.py`
-
-**Interfaces:**
-- Produces: `ConnectionManager()` with `async def connect(show_id, websocket)`, `def disconnect(show_id, websocket)`, `async def broadcast(show_id, payload: dict)`.
-- Modifies `create_app` to accept the manager internally and broadcast `round_log.to_dict()` to `show_id` after every successful `/shows/{show_id}/advance` call.
-- Produces `backend/app/main.py` as the `uvicorn app.main:app` entrypoint, wiring a real `OpenAILLMClient` and a `ShowStore(snapshot_dir="snapshots")`.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `backend/tests/test_ws.py`:
-
-```python
-import json
-
-from fastapi.testclient import TestClient
-
-from app.api import create_app
-from app.store import ShowStore
-
-
-class FakeLLMClient:
-    def complete(self, system_prompt, user_prompt):
-        if "rulings" in system_prompt:
-            return json.dumps({"rulings": []})
-        if "public_action" in system_prompt:
-            return json.dumps({
-                "public_action": "Playing it safe.",
-                "private_messages": [],
-                "leak_message_ids": [],
-            })
-        return "A quiet round."
-
-
-def test_advance_round_broadcasts_over_websocket(tmp_path):
-    store = ShowStore(snapshot_dir=str(tmp_path))
-    app = create_app(store, FakeLLMClient())
-    client = TestClient(app)
-
-    create_response = client.post("/shows", json={
-        "title": "Sheesha Ghar",
-        "agent_preset_ids": ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
-    })
-    show_id = create_response.json()["id"]
-
-    with client.websocket_connect(f"/ws/{show_id}") as websocket:
-        client.post(f"/shows/{show_id}/advance")
-        received = websocket.receive_json()
-
-    assert received["round_number"] == 1
-    assert received["narrative"] == "A quiet round."
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `python -m pytest tests/test_ws.py -v`
-Expected: FAIL — no `/ws/{show_id}` route exists yet (404 on websocket handshake).
-
-- [ ] **Step 3: Implement `backend/app/ws.py`**
-
-```python
-class ConnectionManager:
-    def __init__(self):
-        self.connections = {}
-
-    async def connect(self, show_id, websocket):
-        await websocket.accept()
-        self.connections.setdefault(show_id, []).append(websocket)
-
-    def disconnect(self, show_id, websocket):
-        if websocket in self.connections.get(show_id, []):
-            self.connections[show_id].remove(websocket)
-
-    async def broadcast(self, show_id, payload: dict):
-        for websocket in list(self.connections.get(show_id, [])):
-            await websocket.send_json(payload)
-```
-
-Modify `backend/app/api.py`: add the import and wire broadcast into `advance`, plus a websocket route.
-
-```python
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from .models import Show, AgentStatus, ShowStatus
-from .presets import DEFAULT_SHOW_PROMPT, DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, build_preset_agent
-from .store import ShowStore
-from .orchestrator import advance_round
-from .ws import ConnectionManager
-
-
-class SecretConnection(BaseModel):
-    agent_a: str
-    agent_b: str
-    connection_note: str
+from .event_bus import EventBus
+from .models import AgentStatus, RoundConfig, Show, ShowStatus
+from .presets import (
+    DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, DEFAULT_SHOW_PROMPT, build_preset_agent,
+)
+from .supervisor import run_round
 
 
 class CreateShowRequest(BaseModel):
@@ -1740,17 +2245,38 @@ class CreateShowRequest(BaseModel):
     agent_preset_ids: list
 
 
-def create_app(store: ShowStore, llm_client) -> FastAPI:
+def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
     app = FastAPI()
-    manager = ConnectionManager()
+    config = config or RoundConfig()
+    buses = {}
+    sockets = {}
+    stop_events = {}
+
+    def bus_for(show):
+        if show.id not in buses:
+            bus = EventBus(show)
+            bus.add_listener(lambda event: _fan_out(show.id, event))
+            buses[show.id] = bus
+        return buses[show.id]
+
+    def _fan_out(show_id, event):
+        payload = event.to_dict()
+        for websocket in list(sockets.get(show_id, [])):
+            asyncio.create_task(_safe_send(show_id, websocket, payload))
+
+    async def _safe_send(show_id, websocket, payload):
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            if websocket in sockets.get(show_id, []):
+                sockets[show_id].remove(websocket)
 
     @app.post("/shows")
     def create_show(req: CreateShowRequest):
         if len(req.agent_preset_ids) != 5:
             raise HTTPException(400, "Must pick exactly 5 agents")
-        show_id = req.title.lower().replace(" ", "-")
         show = Show(
-            id=show_id,
+            id=req.title.lower().replace(" ", "-"),
             title=req.title,
             show_prompt=req.show_prompt,
             gm_prompt=req.gm_prompt,
@@ -1762,9 +2288,8 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
         for connection in req.secret_connections:
             agent_a = show.get_agent(connection["agent_a"])
             agent_b = show.get_agent(connection["agent_b"])
-            agent_a.connected_to = agent_b.id
+            agent_a.connected_to, agent_b.connected_to = agent_b.id, agent_a.id
             agent_a.connection_note = connection["connection_note"]
-            agent_b.connected_to = agent_a.id
             agent_b.connection_note = connection["connection_note"]
         store.add(show)
         return show.to_dict()
@@ -1773,18 +2298,33 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
     def get_show(show_id: str):
         return store.get(show_id).to_dict()
 
-    @app.post("/shows/{show_id}/advance")
-    async def advance(show_id: str):
+    @app.post("/shows/{show_id}/rounds")
+    async def start_round(show_id: str):
         show = store.get(show_id)
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
             raise HTTPException(409, "Show has reached its round limit")
-        round_log = await advance_round(show, llm_client, store)
+
+        stop_event = asyncio.Event()
+        stop_events[show_id] = stop_event
+        try:
+            narrative = await run_round(
+                show, bus_for(show), llm_client, config, store, stop_event
+            )
+        finally:
+            stop_events.pop(show_id, None)
+
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
-        payload = round_log.to_dict()
-        await manager.broadcast(show_id, payload)
-        return payload
+        return {"round": show.current_round, "narrative": narrative}
+
+    @app.post("/shows/{show_id}/stop")
+    def stop_round(show_id: str):
+        stop_event = stop_events.get(show_id)
+        if stop_event is None:
+            return {"stopped": False}
+        stop_event.set()
+        return {"stopped": True}
 
     @app.post("/shows/{show_id}/agents/{agent_id}/pause")
     def pause_agent(show_id: str, agent_id: str):
@@ -1804,24 +2344,25 @@ def create_app(store: ShowStore, llm_client) -> FastAPI:
         agent.status = AgentStatus.ELIMINATED
         return agent.to_dict()
 
-    @app.post("/shows/{show_id}/messages/{message_id}/release")
-    def release_message(show_id: str, message_id: str):
+    @app.post("/shows/{show_id}/events/{seq}/release")
+    def release_event(show_id: str, seq: int):
         show = store.get(show_id)
-        for log in show.round_logs:
-            for message in log.messages:
-                if message.id == message_id:
-                    message.released = True
-                    return message.to_dict()
-        raise HTTPException(404, "No message with that id")
+        for event in show.events:
+            if event.seq == seq:
+                event.released = True
+                return event.to_dict()
+        raise HTTPException(404, "No event with that seq")
 
     @app.websocket("/ws/{show_id}")
     async def show_socket(websocket: WebSocket, show_id: str):
-        await manager.connect(show_id, websocket)
+        await websocket.accept()
+        sockets.setdefault(show_id, []).append(websocket)
         try:
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
-            manager.disconnect(show_id, websocket)
+            if websocket in sockets.get(show_id, []):
+                sockets[show_id].remove(websocket)
 
     return app
 ```
@@ -1841,32 +2382,29 @@ app = create_app(store, llm_client)
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/ -v`
-Expected: all tests across the suite pass (this also re-confirms Tasks 1-9 still pass after the `api.py` edit).
+Expected: the whole backend suite passes, 60 tests total across all modules.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/app/ws.py backend/app/api.py backend/app/main.py backend/tests/test_ws.py
-git commit -m "feat: add WebSocket round broadcast and process entrypoint"
+git add backend/app/api.py backend/app/main.py backend/tests/test_api.py
+git commit -m "feat: add API routes, producer controls, and live event WebSocket"
 ```
 
 ---
 
-### Task 11: Frontend scaffold + API client
+### Task 12: Frontend scaffold and API client
 
 **Files:**
-- Create: `frontend/package.json`
-- Create: `frontend/vite.config.js`
-- Create: `frontend/src/api/client.js`
-- Create: `frontend/src/presets.js`
+- Create: `frontend/package.json`, `frontend/vite.config.js`, `frontend/src/api/client.js`, `frontend/src/presets.js`
 - Test: `frontend/src/api/client.test.js`
 
 **Interfaces:**
-- Produces (in `frontend/src/api/client.js`): `createShow(payload) -> Promise<Show>`, `getShow(showId) -> Promise<Show>`, `advanceRound(showId) -> Promise<RoundLog>`, `pauseAgent(showId, agentId) -> Promise<Agent>`, `resumeAgent(showId, agentId) -> Promise<Agent>`, `killAgent(showId, agentId) -> Promise<Agent>`, `releaseMessage(showId, messageId) -> Promise<Message>`. Each does `fetch` against `` `${API_BASE}/...` `` and returns parsed JSON; throws on non-2xx.
-- Produces (in `frontend/src/presets.js`): `PRESET_AGENTS` (mirrors backend `PRESET_AGENT_PERSONALITIES` ids/names — used by Task 12's picker) and `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT` (mirrors backend `presets.py` defaults, for pre-filling the setup form).
-- This is the only module in the frontend allowed to call `fetch` for backend calls — components (Tasks 12-13) import from here.
+- Produces in `client.js`: `createShow(payload)`, `getShow(showId)`, `startRound(showId)`, `stopRound(showId)`, `pauseAgent(showId, agentId)`, `resumeAgent(showId, agentId)`, `killAgent(showId, agentId)`, `releaseEvent(showId, seq)`, and `openEventSocket(showId, onEvent) -> WebSocket`. All REST calls throw on non-2xx.
+- Produces in `presets.js`: `PRESET_AGENTS` (8 `{id, name}` mirroring the backend pool), plus `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT`.
+- This is the only frontend module that calls `fetch` or constructs a `WebSocket`.
 
-- [ ] **Step 1: Scaffold Vite project and write the failing test**
+- [ ] **Step 1: Scaffold and write the failing test**
 
 Create `frontend/package.json`:
 
@@ -1885,8 +2423,8 @@ Create `frontend/package.json`:
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@testing-library/react": "^16.0.1",
     "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
     "@vitejs/plugin-react": "^4.3.1",
     "jsdom": "^25.0.1",
     "vite": "^5.4.8",
@@ -1903,36 +2441,37 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  test: {
-    environment: "jsdom",
-    globals: true,
-  },
+  test: { environment: "jsdom", globals: true, setupFiles: "./src/setupTests.js" },
 });
+```
+
+Create `frontend/src/setupTests.js`:
+
+```javascript
+import "@testing-library/jest-dom";
 ```
 
 Create `frontend/src/api/client.test.js`:
 
 ```javascript
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createShow, getShow, advanceRound, pauseAgent, resumeAgent, killAgent, releaseMessage } from "./client";
+import {
+  createShow, getShow, startRound, stopRound,
+  pauseAgent, resumeAgent, killAgent, releaseEvent,
+} from "./client";
 
 beforeEach(() => {
   global.fetch = vi.fn();
 });
 
-function mockJsonResponse(data, ok = true) {
-  return Promise.resolve({
-    ok,
-    json: () => Promise.resolve(data),
-  });
+function ok(data) {
+  return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
 }
 
 describe("api client", () => {
-  it("createShow posts to /shows and returns parsed JSON", async () => {
-    global.fetch.mockReturnValue(mockJsonResponse({ id: "sheesha-ghar" }));
-
-    const result = await createShow({ title: "Sheesha Ghar", agent_preset_ids: ["a"] });
-
+  it("createShow posts to /shows", async () => {
+    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar" }));
+    const result = await createShow({ title: "Sheesha Ghar", agent_preset_ids: [] });
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("/shows"),
       expect.objectContaining({ method: "POST" })
@@ -1940,72 +2479,72 @@ describe("api client", () => {
     expect(result).toEqual({ id: "sheesha-ghar" });
   });
 
-  it("getShow fetches /shows/{id}", async () => {
-    global.fetch.mockReturnValue(mockJsonResponse({ id: "sheesha-ghar" }));
-    const result = await getShow("sheesha-ghar");
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/shows/sheesha-ghar"));
-    expect(result).toEqual({ id: "sheesha-ghar" });
+  it("getShow fetches the show", async () => {
+    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar" }));
+    await getShow("sheesha-ghar");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar")
+    );
   });
 
-  it("advanceRound posts to /shows/{id}/advance", async () => {
-    global.fetch.mockReturnValue(mockJsonResponse({ round_number: 1 }));
-    const result = await advanceRound("sheesha-ghar");
+  it("startRound and stopRound hit their routes", async () => {
+    global.fetch.mockReturnValue(ok({ round: 1, narrative: "x" }));
+    await startRound("sheesha-ghar");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/advance"),
-      expect.objectContaining({ method: "POST" })
-    );
-    expect(result).toEqual({ round_number: 1 });
-  });
-
-  it("pauseAgent, resumeAgent, killAgent post to the right agent routes", async () => {
-    global.fetch.mockReturnValue(mockJsonResponse({ status: "paused" }));
-    await pauseAgent("sheesha-ghar", "vex");
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/agents/vex/pause"),
+      expect.stringContaining("/shows/sheesha-ghar/rounds"),
       expect.objectContaining({ method: "POST" })
     );
 
-    await resumeAgent("sheesha-ghar", "vex");
+    global.fetch.mockReturnValue(ok({ stopped: true }));
+    await stopRound("sheesha-ghar");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/agents/vex/resume"),
-      expect.objectContaining({ method: "POST" })
-    );
-
-    await killAgent("sheesha-ghar", "vex");
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/agents/vex/kill"),
+      expect.stringContaining("/shows/sheesha-ghar/stop"),
       expect.objectContaining({ method: "POST" })
     );
   });
 
-  it("releaseMessage posts to the message release route", async () => {
-    global.fetch.mockReturnValue(mockJsonResponse({ id: "m1", released: true }));
-    const result = await releaseMessage("sheesha-ghar", "m1");
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/messages/m1/release"),
-      expect.objectContaining({ method: "POST" })
-    );
-    expect(result).toEqual({ id: "m1", released: true });
+  it("agent controls hit pause, resume, and kill routes", async () => {
+    global.fetch.mockReturnValue(ok({ status: "paused" }));
+    await pauseAgent("sheesha-ghar", "vikram");
+    await resumeAgent("sheesha-ghar", "vikram");
+    await killAgent("sheesha-ghar", "vikram");
+
+    const urls = global.fetch.mock.calls.map((call) => call[0]);
+    expect(urls[0]).toContain("/agents/vikram/pause");
+    expect(urls[1]).toContain("/agents/vikram/resume");
+    expect(urls[2]).toContain("/agents/vikram/kill");
   });
 
-  it("throws when the response is not ok", async () => {
-    global.fetch.mockReturnValue(mockJsonResponse({ detail: "bad request" }, false));
-    await expect(getShow("missing")).rejects.toThrow();
+  it("releaseEvent posts to the event release route", async () => {
+    global.fetch.mockReturnValue(ok({ seq: 3, released: true }));
+    const result = await releaseEvent("sheesha-ghar", 3);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/events/3/release"),
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(result.released).toBe(true);
+  });
+
+  it("throws when a response is not ok", async () => {
+    global.fetch.mockReturnValue(
+      Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: "nope" }) })
+    );
+    await expect(getShow("missing")).rejects.toThrow("nope");
   });
 });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run (from `frontend/`): `npm install && npm test`
-Expected: FAIL — `frontend/src/api/client.js` does not exist yet.
+Run from `frontend/`: `npm install && npm test`
+Expected: FAIL — `src/api/client.js` does not exist.
 
-- [ ] **Step 3: Implement `frontend/src/api/client.js`**
+- [ ] **Step 3: Implement `frontend/src/api/client.js` and `frontend/src/presets.js`**
 
 ```javascript
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
-async function request(path, options = {}) {
+async function request(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -2014,40 +2553,56 @@ async function request(path, options = {}) {
   return response.json();
 }
 
+function post(path, body) {
+  const options = { method: "POST" };
+  if (body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  return request(path, options);
+}
+
 export function createShow(payload) {
-  return request("/shows", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  return post("/shows", payload);
 }
 
 export function getShow(showId) {
   return request(`/shows/${showId}`);
 }
 
-export function advanceRound(showId) {
-  return request(`/shows/${showId}/advance`, { method: "POST" });
+export function startRound(showId) {
+  return post(`/shows/${showId}/rounds`);
+}
+
+export function stopRound(showId) {
+  return post(`/shows/${showId}/stop`);
 }
 
 export function pauseAgent(showId, agentId) {
-  return request(`/shows/${showId}/agents/${agentId}/pause`, { method: "POST" });
+  return post(`/shows/${showId}/agents/${agentId}/pause`);
 }
 
 export function resumeAgent(showId, agentId) {
-  return request(`/shows/${showId}/agents/${agentId}/resume`, { method: "POST" });
+  return post(`/shows/${showId}/agents/${agentId}/resume`);
 }
 
 export function killAgent(showId, agentId) {
-  return request(`/shows/${showId}/agents/${agentId}/kill`, { method: "POST" });
+  return post(`/shows/${showId}/agents/${agentId}/kill`);
 }
 
-export function releaseMessage(showId, messageId) {
-  return request(`/shows/${showId}/messages/${messageId}/release`, { method: "POST" });
+export function releaseEvent(showId, seq) {
+  return post(`/shows/${showId}/events/${seq}/release`);
+}
+
+export function openEventSocket(showId, onEvent) {
+  const url = `${API_BASE.replace(/^http/, "ws")}/ws/${showId}`;
+  const socket = new WebSocket(url);
+  socket.onmessage = (message) => onEvent(JSON.parse(message.data));
+  return socket;
 }
 ```
 
-Create `frontend/src/presets.js` (mirrors `backend/app/presets.py` — kept in sync by hand for the hackathon):
+Create `frontend/src/presets.js` (mirrors `backend/app/presets.py`, kept in sync by hand):
 
 ```javascript
 export const PRESET_AGENTS = [
@@ -2062,21 +2617,23 @@ export const PRESET_AGENTS = [
 ];
 
 export const DEFAULT_SHOW_PROMPT =
-  "A group of strangers live together under constant observation. " +
-  "Alliances form and break. Every few rounds the house nominates " +
-  "someone; the Game Master and producer decide who leaves.";
+  "Five strangers live together in a house under constant observation. " +
+  "They can speak to the whole house or privately to each other. Alliances " +
+  "form and break. The Game Master watches everything and can warn or " +
+  "remove anyone who breaks the house rules.";
 
 export const DEFAULT_GM_PROMPT =
-  "You are the Game Master. You are fair but firm. You enforce the " +
-  "house rules exactly as written, you do not play favorites, and you " +
-  "explain every ruling in one or two sentences so the house understands " +
-  "why.";
+  "You are the Game Master of a reality show. You are fair but firm. You " +
+  "enforce the house rules exactly as written and never play favorites. " +
+  "Interject only when it matters: a rule was broken, or the house needs " +
+  "direction. Explain every ruling in one or two sentences. End the round " +
+  "when the drama has peaked or the conversation has run its course.";
 
 export const DEFAULT_RULES_TEXT =
-  "1. No agent may declare an alliance more than twice per round.\n" +
-  "2. No agent may accuse another of an action without stating what " +
+  "1. No agent may accuse another of an action without stating what " +
   "evidence they have.\n" +
-  "3. Direct insults with no strategic content are not allowed.";
+  "2. Direct insults with no strategic content are not allowed.\n" +
+  "3. No agent may claim the Game Master has given them a private instruction.";
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -2087,21 +2644,21 @@ Expected: 6 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add frontend/package.json frontend/vite.config.js frontend/src/api/client.js frontend/src/api/client.test.js frontend/src/presets.js
-git commit -m "feat: scaffold frontend project and add backend API client"
+git add frontend/package.json frontend/vite.config.js frontend/src/setupTests.js frontend/src/api/client.js frontend/src/api/client.test.js frontend/src/presets.js
+git commit -m "feat: scaffold frontend and add API client with event socket"
 ```
 
 ---
 
-### Task 12: Show Setup screen
+### Task 13: Show Setup screen
 
 **Files:**
 - Create: `frontend/src/components/ShowSetup.jsx`
 - Test: `frontend/src/components/ShowSetup.test.jsx`
 
 **Interfaces:**
-- Consumes: `createShow` from `../api/client` (Task 11); `PRESET_AGENTS`, `DEFAULT_SHOW_PROMPT`, `DEFAULT_GM_PROMPT`, `DEFAULT_RULES_TEXT` from `../presets` (Task 11).
-- Produces: `ShowSetup({ onCreated })` — a React component. On submit, calls `createShow({ title, show_prompt, gm_prompt, rules_text, max_rounds, agent_preset_ids })` and calls `onCreated(show)` with the response. Submit is disabled unless exactly 5 agents are checked. `max_rounds` comes from a number input; leaving it blank sends `null` (unlimited, producer ends manually).
+- Consumes `createShow` (Task 12), `PRESET_AGENTS` and the three default prompts (Task 12).
+- Produces `ShowSetup({ onCreated })`. Submits `{title, show_prompt, gm_prompt, rules_text, max_rounds, agent_preset_ids}` then calls `onCreated(show)`. Submit is disabled unless exactly 5 agents are checked. Blank rounds field sends `null`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2113,68 +2670,68 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ShowSetup from "./ShowSetup";
 import * as api from "../api/client";
 
+const FIVE_NAMES = [
+  "The Strategist", "The Diplomat", "The Loyalist", "The Operator", "The Wildcard",
+];
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-test_agents_names = ["The Strategist", "The Diplomat", "The Loyalist", "The Operator", "The Wildcard"];
+function selectFive() {
+  for (const name of FIVE_NAMES) {
+    fireEvent.click(screen.getByLabelText(name));
+  }
+}
 
 describe("ShowSetup", () => {
-  it("disables submit until exactly 5 agents are selected", () => {
+  it("disables submit until exactly five agents are selected", () => {
     render(<ShowSetup onCreated={() => {}} />);
-    const submitButton = screen.getByRole("button", { name: /start show/i });
-    expect(submitButton).toBeDisabled();
+    const submit = screen.getByRole("button", { name: /start show/i });
+    expect(submit).toBeDisabled();
 
-    for (const name of test_agents_names) {
-      fireEvent.click(screen.getByLabelText(name));
-    }
+    selectFive();
+    expect(submit).not.toBeDisabled();
 
-    expect(submitButton).not.toBeDisabled();
+    fireEvent.click(screen.getByLabelText("The Skeptic"));
+    expect(submit).toBeDisabled();
   });
 
-  it("submits selected agents and prompts, then calls onCreated", async () => {
-    const createShowSpy = vi
-      .spyOn(api, "createShow")
-      .mockResolvedValue({ id: "sheesha-ghar", title: "Sheesha Ghar" });
+  it("submits prompts, rounds, and agents, then reports the created show", async () => {
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
     const onCreated = vi.fn();
 
     render(<ShowSetup onCreated={onCreated} />);
-
     fireEvent.change(screen.getByLabelText(/show title/i), {
       target: { value: "Sheesha Ghar" },
     });
     fireEvent.change(screen.getByLabelText(/number of rounds/i), {
       target: { value: "6" },
     });
-    for (const name of test_agents_names) {
-      fireEvent.click(screen.getByLabelText(name));
-    }
+    selectFive();
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "sheesha-ghar", title: "Sheesha Ghar" }));
-
-    expect(createShowSpy).toHaveBeenCalledWith(
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "sheesha-ghar" }));
+    expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Sheesha Ghar",
         max_rounds: 6,
-        agent_preset_ids: ["strategist", "diplomat", "loyalist", "operator", "wildcard"],
+        agent_preset_ids: [
+          "strategist", "diplomat", "loyalist", "operator", "wildcard",
+        ],
       })
     );
   });
 
-  it("leaves max_rounds null when the field is left blank (unlimited rounds)", async () => {
-    const createShowSpy = vi
-      .spyOn(api, "createShow")
-      .mockResolvedValue({ id: "sheesha-ghar", title: "Sheesha Ghar" });
+  it("sends null rounds when the field is left blank", async () => {
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
 
     render(<ShowSetup onCreated={() => {}} />);
-    for (const name of test_agents_names) {
-      fireEvent.click(screen.getByLabelText(name));
-    }
+    selectFive();
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
-    await waitFor(() => expect(createShowSpy).toHaveBeenCalled());
-    expect(createShowSpy).toHaveBeenCalledWith(expect.objectContaining({ max_rounds: null }));
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ max_rounds: null }));
   });
 });
 ```
@@ -2182,14 +2739,16 @@ describe("ShowSetup", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `npm test`
-Expected: FAIL — `frontend/src/components/ShowSetup.jsx` does not exist yet.
+Expected: FAIL — `src/components/ShowSetup.jsx` does not exist.
 
 - [ ] **Step 3: Implement `frontend/src/components/ShowSetup.jsx`**
 
 ```javascript
 import { useState } from "react";
 import { createShow } from "../api/client";
-import { PRESET_AGENTS, DEFAULT_SHOW_PROMPT, DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT } from "../presets";
+import {
+  PRESET_AGENTS, DEFAULT_SHOW_PROMPT, DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT,
+} from "../presets";
 
 export default function ShowSetup({ onCreated }) {
   const [title, setTitle] = useState("Sheesha Ghar");
@@ -2201,7 +2760,9 @@ export default function ShowSetup({ onCreated }) {
 
   function toggleAgent(id) {
     setSelectedIds((current) =>
-      current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id]
+      current.includes(id)
+        ? current.filter((existing) => existing !== id)
+        : [...current, id]
     );
   }
 
@@ -2223,7 +2784,7 @@ export default function ShowSetup({ onCreated }) {
       <label htmlFor="show-title">Show title</label>
       <input id="show-title" value={title} onChange={(e) => setTitle(e.target.value)} />
 
-      <label htmlFor="max-rounds">Number of rounds (leave blank for unlimited)</label>
+      <label htmlFor="max-rounds">Number of rounds (blank for unlimited)</label>
       <input
         id="max-rounds"
         type="number"
@@ -2232,17 +2793,29 @@ export default function ShowSetup({ onCreated }) {
         onChange={(e) => setMaxRounds(e.target.value)}
       />
 
-      <label htmlFor="show-prompt">Show premise and rules</label>
-      <textarea id="show-prompt" value={showPrompt} onChange={(e) => setShowPrompt(e.target.value)} />
+      <label htmlFor="show-prompt">Show premise</label>
+      <textarea
+        id="show-prompt"
+        value={showPrompt}
+        onChange={(e) => setShowPrompt(e.target.value)}
+      />
 
       <label htmlFor="gm-prompt">Game Master personality</label>
-      <textarea id="gm-prompt" value={gmPrompt} onChange={(e) => setGmPrompt(e.target.value)} />
+      <textarea
+        id="gm-prompt"
+        value={gmPrompt}
+        onChange={(e) => setGmPrompt(e.target.value)}
+      />
 
       <label htmlFor="rules-text">House rules</label>
-      <textarea id="rules-text" value={rulesText} onChange={(e) => setRulesText(e.target.value)} />
+      <textarea
+        id="rules-text"
+        value={rulesText}
+        onChange={(e) => setRulesText(e.target.value)}
+      />
 
       <fieldset>
-        <legend>Pick exactly 5 contestants</legend>
+        <legend>Pick exactly five housemates</legend>
         {PRESET_AGENTS.map((agent) => (
           <label key={agent.id} htmlFor={`agent-${agent.id}`}>
             <input
@@ -2267,28 +2840,88 @@ export default function ShowSetup({ onCreated }) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test`
-Expected: all passed. (Fix the test file's stray bare assignment `test_agents_names = [...]` to `const test_agents_names = [...]` if the runner flags it as a syntax error — declare it at module scope above the `describe` block.)
+Expected: 9 passed (6 client + 3 setup).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/ShowSetup.jsx frontend/src/components/ShowSetup.test.jsx
-git commit -m "feat: add Show Setup screen with agent picker and editable prompts"
+git commit -m "feat: add show setup screen with editable prompts and agent picker"
 ```
 
 ---
 
-### Task 13: Live Room (roster + agent controls + advance)
+### Task 14: Live Room and event feed
 
 **Files:**
-- Create: `frontend/src/components/LiveRoom.jsx`
-- Test: `frontend/src/components/LiveRoom.test.jsx`
+- Create: `frontend/src/components/EventFeed.jsx`, `frontend/src/components/LiveRoom.jsx`
+- Test: `frontend/src/components/EventFeed.test.jsx`, `frontend/src/components/LiveRoom.test.jsx`
 
 **Interfaces:**
-- Consumes: `advanceRound`, `pauseAgent`, `resumeAgent`, `killAgent` from `../api/client` (Task 11).
-- Produces: `LiveRoom({ show, onShowUpdated })` — renders the contestant roster with status pills and Pause/Resume/Kill buttons, and an "Advance Round" button. Every action calls the matching API function, then calls `onShowUpdated(updatedShowOrRoundLog)` with the response so the parent can refresh state.
+- Produces `EventFeed({ showId, events, narratives, onEventReleased })` — two tabs. "Live feed" shows **every** event including unreleased private ones and confessions, each labelled, with a Reveal button on unreleased private events calling `releaseEvent(showId, seq)`. "Story" shows the per-round narratives in round order.
+- Produces `LiveRoom({ show, onShowUpdated })` — roster with status and pause/resume/kill, plus Start round and Stop round buttons wired to `startRound`/`stopRound`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
+
+Create `frontend/src/components/EventFeed.test.jsx`:
+
+```javascript
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import EventFeed from "./EventFeed";
+import * as api from "../api/client";
+
+const events = [
+  { seq: 0, round: 1, sender_id: "game_master", text: "Round 1 begins.",
+    kind: "gm_announcement", visibility: "public", recipients: [], released: false },
+  { seq: 1, round: 1, sender_id: "vikram", text: "I trust no one.",
+    kind: "agent_action", visibility: "public", recipients: [], released: false },
+  { seq: 2, round: 1, sender_id: "simran", text: "Ally with me.",
+    kind: "agent_action", visibility: "private", recipients: ["karan"], released: false },
+  { seq: 3, round: 1, sender_id: "simran", text: "I am playing both sides.",
+    kind: "confession", visibility: "private", recipients: [], released: false },
+];
+
+const narratives = { 1: "The house settled into an uneasy quiet." };
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("EventFeed", () => {
+  it("live feed shows public, private, and confession events", () => {
+    render(<EventFeed showId="s1" events={events} narratives={narratives}
+                      onEventReleased={() => {}} />);
+    expect(screen.getByText(/I trust no one\./)).toBeInTheDocument();
+    expect(screen.getByText(/Ally with me\./)).toBeInTheDocument();
+    expect(screen.getByText(/I am playing both sides\./)).toBeInTheDocument();
+  });
+
+  it("story tab shows narratives and hides raw events", () => {
+    render(<EventFeed showId="s1" events={events} narratives={narratives}
+                      onEventReleased={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /story/i }));
+
+    expect(screen.getByText("The house settled into an uneasy quiet.")).toBeInTheDocument();
+    expect(screen.queryByText(/I trust no one\./)).not.toBeInTheDocument();
+  });
+
+  it("reveal appears only on unreleased private events and calls the API", async () => {
+    const spy = vi.spyOn(api, "releaseEvent").mockResolvedValue({ seq: 2, released: true });
+    const onEventReleased = vi.fn();
+
+    render(<EventFeed showId="s1" events={events} narratives={narratives}
+                      onEventReleased={onEventReleased} />);
+
+    const revealButtons = screen.getAllByRole("button", { name: /reveal/i });
+    expect(revealButtons).toHaveLength(2);
+
+    fireEvent.click(revealButtons[0]);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", 2));
+    expect(onEventReleased).toHaveBeenCalledWith({ seq: 2, released: true });
+  });
+});
+```
 
 Create `frontend/src/components/LiveRoom.test.jsx`:
 
@@ -2303,10 +2936,9 @@ const show = {
   title: "Sheesha Ghar",
   current_round: 0,
   contestants: [
-    { id: "vex", name: "Vex", status: "active" },
-    { id: "mira", name: "Mira", status: "warned" },
+    { id: "vikram", name: "Vikram", status: "active" },
+    { id: "meera", name: "Meera", status: "warned" },
   ],
-  round_logs: [],
 };
 
 beforeEach(() => {
@@ -2314,33 +2946,41 @@ beforeEach(() => {
 });
 
 describe("LiveRoom", () => {
-  it("renders contestant names and status", () => {
+  it("renders the roster with names and statuses", () => {
     render(<LiveRoom show={show} onShowUpdated={() => {}} />);
-    expect(screen.getByText("Vex")).toBeInTheDocument();
+    expect(screen.getByText("Vikram")).toBeInTheDocument();
     expect(screen.getByText("active")).toBeInTheDocument();
     expect(screen.getByText("warned")).toBeInTheDocument();
   });
 
-  it("clicking Advance Round calls the API and reports the result", async () => {
-    const advanceSpy = vi.spyOn(api, "advanceRound").mockResolvedValue({ round_number: 1 });
+  it("start round calls the API and reports the result", async () => {
+    const spy = vi.spyOn(api, "startRound").mockResolvedValue({ round: 1, narrative: "x" });
     const onShowUpdated = vi.fn();
 
     render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
-    fireEvent.click(screen.getByRole("button", { name: /advance round/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start round/i }));
 
-    await waitFor(() => expect(onShowUpdated).toHaveBeenCalledWith({ round_number: 1 }));
-    expect(advanceSpy).toHaveBeenCalledWith("sheesha-ghar");
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+    expect(onShowUpdated).toHaveBeenCalled();
   });
 
-  it("clicking Kill on a contestant calls killAgent", async () => {
-    const killSpy = vi.spyOn(api, "killAgent").mockResolvedValue({ id: "vex", status: "eliminated" });
-    const onShowUpdated = vi.fn();
+  it("stop round calls the stop API", async () => {
+    const spy = vi.spyOn(api, "stopRound").mockResolvedValue({ stopped: true });
 
-    render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
-    fireEvent.click(screen.getByRole("button", { name: /kill vex/i }));
+    render(<LiveRoom show={show} onShowUpdated={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /stop round/i }));
 
-    await waitFor(() => expect(killSpy).toHaveBeenCalledWith("sheesha-ghar", "vex"));
-    expect(onShowUpdated).toHaveBeenCalledWith({ id: "vex", status: "eliminated" });
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+  });
+
+  it("kill calls killAgent for that contestant", async () => {
+    const spy = vi.spyOn(api, "killAgent")
+      .mockResolvedValue({ id: "vikram", status: "eliminated" });
+
+    render(<LiveRoom show={show} onShowUpdated={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /kill vikram/i }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar", "vikram"));
   });
 });
 ```
@@ -2348,49 +2988,110 @@ describe("LiveRoom", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `npm test`
-Expected: FAIL — `frontend/src/components/LiveRoom.jsx` does not exist yet.
+Expected: FAIL — neither component file exists.
 
-- [ ] **Step 3: Implement `frontend/src/components/LiveRoom.jsx`**
+- [ ] **Step 3: Implement both components**
+
+Create `frontend/src/components/EventFeed.jsx`:
 
 ```javascript
-import { advanceRound, pauseAgent, resumeAgent, killAgent } from "../api/client";
+import { useState } from "react";
+import { releaseEvent } from "../api/client";
+
+function label(event) {
+  if (event.kind === "confession") return "[confession, viewers only]";
+  if (event.kind === "gm_ruling") return "[game master ruling]";
+  if (event.kind === "gm_announcement") return "[game master]";
+  if (event.visibility === "private" && !event.released) return "[private, viewers only]";
+  return "";
+}
+
+export default function EventFeed({ showId, events, narratives, onEventReleased }) {
+  const [tab, setTab] = useState("live");
+
+  async function handleReveal(seq) {
+    const updated = await releaseEvent(showId, seq);
+    onEventReleased(updated);
+  }
+
+  const rounds = Object.keys(narratives)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  return (
+    <div>
+      <button onClick={() => setTab("live")}>Live feed</button>
+      <button onClick={() => setTab("story")}>Story</button>
+
+      {tab === "live" && (
+        <ul>
+          {events.map((event) => (
+            <li key={event.seq}>
+              {label(event)} {event.sender_id}: {event.text}
+              {event.visibility === "private" && !event.released && (
+                <button onClick={() => handleReveal(event.seq)}>Reveal</button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {tab === "story" && (
+        <div>
+          {rounds.map((round) => (
+            <p key={round}>{narratives[round]}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+Create `frontend/src/components/LiveRoom.jsx`:
+
+```javascript
+import { startRound, stopRound, pauseAgent, resumeAgent, killAgent } from "../api/client";
 
 export default function LiveRoom({ show, onShowUpdated }) {
-  async function handleAdvance() {
-    const roundLog = await advanceRound(show.id);
-    onShowUpdated(roundLog);
+  async function handleStart() {
+    onShowUpdated(await startRound(show.id));
   }
 
-  async function handlePause(agentId) {
-    const agent = await pauseAgent(show.id, agentId);
-    onShowUpdated(agent);
+  async function handleStop() {
+    onShowUpdated(await stopRound(show.id));
   }
 
-  async function handleResume(agentId) {
-    const agent = await resumeAgent(show.id, agentId);
-    onShowUpdated(agent);
-  }
-
-  async function handleKill(agentId) {
-    const agent = await killAgent(show.id, agentId);
-    onShowUpdated(agent);
+  async function handleAgentAction(action, agentId) {
+    onShowUpdated(await action(show.id, agentId));
   }
 
   return (
     <div>
-      <button onClick={handleAdvance}>Advance round</button>
+      <button onClick={handleStart}>Start round</button>
+      <button onClick={handleStop}>Stop round</button>
+
       <ul>
         {show.contestants.map((agent) => (
           <li key={agent.id}>
             <span>{agent.name}</span>
             <span>{agent.status}</span>
-            <button aria-label={`Pause ${agent.name}`} onClick={() => handlePause(agent.id)}>
+            <button
+              aria-label={`Pause ${agent.name}`}
+              onClick={() => handleAgentAction(pauseAgent, agent.id)}
+            >
               Pause
             </button>
-            <button aria-label={`Resume ${agent.name}`} onClick={() => handleResume(agent.id)}>
+            <button
+              aria-label={`Resume ${agent.name}`}
+              onClick={() => handleAgentAction(resumeAgent, agent.id)}
+            >
               Resume
             </button>
-            <button aria-label={`Kill ${agent.name}`} onClick={() => handleKill(agent.id)}>
+            <button
+              aria-label={`Kill ${agent.name}`}
+              onClick={() => handleAgentAction(killAgent, agent.id)}
+            >
               Kill
             </button>
           </li>
@@ -2404,157 +3105,19 @@ export default function LiveRoom({ show, onShowUpdated }) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test`
-Expected: all passed.
+Expected: 16 passed (6 client + 3 setup + 3 feed + 4 live room).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add frontend/src/components/LiveRoom.jsx frontend/src/components/LiveRoom.test.jsx
-git commit -m "feat: add Live Room roster with pause/resume/kill controls and advance round"
+git add frontend/src/components/EventFeed.jsx frontend/src/components/EventFeed.test.jsx frontend/src/components/LiveRoom.jsx frontend/src/components/LiveRoom.test.jsx
+git commit -m "feat: add live room controls and omniscient event feed with story tab"
 ```
 
 ---
 
-### Task 14: Round Feed + Full Story tabs
+## Not in this plan
 
-**Files:**
-- Create: `frontend/src/components/RoundFeed.jsx`
-- Test: `frontend/src/components/RoundFeed.test.jsx`
+Deferred per spec §11, in priority order: the stage/phase system with auto-pause, per-agent-targeted producer notes injected mid-round, mid-show rule editing, the POV toggle in the viewer UI (the visibility model already supports it — only the UI affordance is missing, see `glass-house-mockup.html`), and the loyalty ledger.
 
-**Interfaces:**
-- Consumes: `releaseMessage` from `../api/client` (Task 11). Otherwise driven by `round_logs` data shaped like `Show.round_logs` from the backend (`RoundLog.to_dict()` shape: `{round_number, messages: [{id, round, sender_id, text, kind, visibility, recipients, released}], narrative}`).
-- Produces: `RoundFeed({ showId, roundLogs, onMessageReleased })` — renders a two-tab view: "Live Round Feed" (all messages from all rounds, every message shown regardless of visibility — per spec §6, viewers are always omniscient) and "Full Story" (just the concatenated `narrative` strings, one per round, in order). Unreleased private messages in the Live Round Feed tab get a "Reveal" button (the Judge/Audience Wildcard) that calls `releaseMessage(showId, message.id)` and then calls `onMessageReleased(updatedMessage)`.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `frontend/src/components/RoundFeed.test.jsx`:
-
-```javascript
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import RoundFeed from "./RoundFeed";
-import * as api from "../api/client";
-
-const roundLogs = [
-  {
-    round_number: 1,
-    narrative: "The house settled into an uneasy quiet.",
-    messages: [
-      { id: "m1", round: 1, sender_id: "vex", text: "I trust no one.", kind: "action", visibility: "public", recipients: [], released: false },
-      { id: "m2", round: 1, sender_id: "simran", text: "Let's team up.", kind: "action", visibility: "private", recipients: ["karan"], released: false },
-      { id: "m3", round: 1, sender_id: "game_master", text: "Vikram warned.", kind: "gm_ruling", visibility: "public", recipients: [], released: false },
-    ],
-  },
-];
-
-beforeEach(() => {
-  vi.restoreAllMocks();
-});
-
-describe("RoundFeed", () => {
-  it("Live Round Feed tab shows every message including private ones", () => {
-    render(<RoundFeed showId="sheesha-ghar" roundLogs={roundLogs} onMessageReleased={() => {}} />);
-    expect(screen.getByText("I trust no one.")).toBeInTheDocument();
-    expect(screen.getByText("Let's team up.")).toBeInTheDocument();
-    expect(screen.getByText("Vikram warned.")).toBeInTheDocument();
-  });
-
-  it("Full Story tab shows only the narrative text", () => {
-    render(<RoundFeed showId="sheesha-ghar" roundLogs={roundLogs} onMessageReleased={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /full story/i }));
-
-    expect(screen.getByText("The house settled into an uneasy quiet.")).toBeInTheDocument();
-    expect(screen.queryByText("I trust no one.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Let's team up.")).not.toBeInTheDocument();
-  });
-
-  it("shows a Reveal button only on unreleased private messages, and releasing calls the API", async () => {
-    const releaseSpy = vi
-      .spyOn(api, "releaseMessage")
-      .mockResolvedValue({ id: "m2", released: true });
-    const onMessageReleased = vi.fn();
-
-    render(<RoundFeed showId="sheesha-ghar" roundLogs={roundLogs} onMessageReleased={onMessageReleased} />);
-
-    expect(screen.queryByRole("button", { name: /reveal/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /reveal/i }));
-
-    await waitFor(() => expect(releaseSpy).toHaveBeenCalledWith("sheesha-ghar", "m2"));
-    expect(onMessageReleased).toHaveBeenCalledWith({ id: "m2", released: true });
-  });
-});
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `npm test`
-Expected: FAIL — `frontend/src/components/RoundFeed.jsx` does not exist yet.
-
-- [ ] **Step 3: Implement `frontend/src/components/RoundFeed.jsx`**
-
-```javascript
-import { useState } from "react";
-import { releaseMessage } from "../api/client";
-
-export default function RoundFeed({ showId, roundLogs, onMessageReleased }) {
-  const [tab, setTab] = useState("live");
-
-  async function handleReveal(messageId) {
-    const updated = await releaseMessage(showId, messageId);
-    onMessageReleased(updated);
-  }
-
-  return (
-    <div>
-      <button onClick={() => setTab("live")}>Live round feed</button>
-      <button onClick={() => setTab("story")}>Full story</button>
-
-      {tab === "live" && (
-        <div>
-          {roundLogs.map((log) => (
-            <div key={log.round_number}>
-              <h3>Round {log.round_number}</h3>
-              {log.messages.map((message) => (
-                <p key={message.id}>
-                  {message.visibility === "private" && !message.released ? "[viewers only] " : ""}
-                  {message.sender_id}: {message.text}
-                  {message.visibility === "private" && !message.released && (
-                    <button onClick={() => handleReveal(message.id)}>Reveal</button>
-                  )}
-                </p>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {tab === "story" && (
-        <div>
-          {roundLogs.map((log) => (
-            <p key={log.round_number}>{log.narrative}</p>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `npm test`
-Expected: all passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add frontend/src/components/RoundFeed.jsx frontend/src/components/RoundFeed.test.jsx
-git commit -m "feat: add Live Round Feed and Full Story tabs"
-```
-
----
-
-## Not in this plan (stretch goals, build only if the above is done early)
-
-Per the design spec §11, in priority order: stage/phase auto-pause system, per-agent-targeted producer notes, mid-show rule-editing UI, and a frontend POV toggle (the backend visibility model from Task 4 already supports it — only the UI affordance from the `glass-house-mockup.html` mockup is missing). A live-updating frontend consumer of the Task 10 WebSocket (vs. using the direct HTTP response from `advanceRound`) is also deferred — the backend broadcasts either way, so this is additive, not blocking.
+Wiring `openEventSocket` into `LiveRoom` for true live streaming is also deferred: Task 11 broadcasts every event over the WebSocket already, and Task 14's feed renders whatever event array it is handed, so connecting them is additive rather than blocking. Until then the feed refreshes from `getShow` after each round.

@@ -7,171 +7,224 @@ slice, not the full feature list from the original brief. Everything under
 ## 1. What this is
 
 An AI reality show where 5 LLM-driven agents, each with a distinct personality,
-interact in rounds inside a house governed by user-defined rules. A Game
-Master agent enforces those rules. Viewers see a live chat feed and a
-narrated story; agents only see what they'd realistically know.
+live together in a house governed by user-defined rules. Agents run as
+independent concurrent processes that message each other freely — publicly to
+the whole house, or privately to individuals. A Game Master agent watches the
+same event stream live and can warn, eject, or call time on a round while it is
+still happening. Viewers see every event, including private ones; agents see
+only what reached them.
 
 ## 2. Prompt surfaces (the part the user fills in)
 
-The harness ships with **defaults** for every one of these so the app runs
-out of the box, but each is a swappable prompt/config the producer (user)
-supplies before or during a show:
+The harness ships with **defaults** for every one of these so the app runs out of
+the box, but each is a swappable prompt/config the producer (user) supplies
+before or during a show:
 
 | Surface | What it controls | Where it lives |
 |---|---|---|
-| Show definition prompt | Premise, rules, boundaries, end condition | `shows/{show_id}/config.json` → `show_prompt` |
-| Agent personality prompt (x8-10 in the pool) | Each preset personality's voice, values, goals | `agents/presets/*.json` → `personality_prompt` |
-| Game Master personality prompt | How strict/lenient/dramatic the GM is, its own "voice" | `shows/{show_id}/config.json` → `gm_prompt` |
-| Per-round producer note (optional) | Twist/guidance injected before a round, group-wide or targeted at one agent | submitted at runtime via API, stored in round log |
+| Show definition prompt | Premise, rules, boundaries, end condition | `Show.show_prompt` |
+| Agent personality prompt (x8 in the pool) | Each preset personality's voice, values, goals | `presets.py` → `PRESET_AGENT_PERSONALITIES` |
+| Game Master personality prompt | How strict/lenient/dramatic the GM is, when it interjects, when it calls time | `Show.gm_prompt` |
+| House rules text | The rules the GM enforces | `Show.rules_text` |
+| Secret connections | Hidden prior relationships between two agents ("Mirror Pairs") | `Agent.connected_to` / `connection_note` |
 
-Defaults: a generic reality-show ruleset, 8 preset personalities (archetypes
-like strategist/diplomat/wildcard/manipulator/loyalist/etc.), and a neutral
-"fair but firm" GM prompt. The user edits/replaces these via the frontend
+Defaults: a generic reality-show ruleset, 8 preset personalities, and a neutral
+"fair but firm" GM prompt. The user edits or replaces these via the frontend
 before starting a show; nothing is hardcoded elsewhere in the pipeline.
 
 ## 3. Architecture
 
-Single-process FastAPI backend, in-memory state, WebSocket push to a React
-frontend. No external queue or DB for the hackathon — state is dumped to a
-JSON file after each round as a crash safety net.
+Single-process FastAPI backend. All show state is in memory, snapshotted to JSON
+after each round. Agents are concurrent `asyncio` tasks communicating through an
+event bus. A WebSocket streams every event to the frontend live as it is
+published.
 
 ```
-React frontend  <── WebSocket + REST ──>  FastAPI backend
-                                              │
-                                       Show Orchestrator (in-memory)
-                                              │
-                        ┌─────────────┬───────┴───────┬─────────────┐
-                    Agent Runner  GM Runner      Narrator Runner   State Store
-                   (OpenAI calls,  (OpenAI call,  (OpenAI call,    (Python objects
-                    parallel per   post-round)     post-GM)         + JSON snapshot)
-                    active agent)
+React frontend  <── WebSocket (live event stream) + REST ──>  FastAPI backend
+                                                                    │
+                                                            Round Supervisor
+                                                                    │
+                    ┌───────────────────┬───────────────────────────┴──────────┐
+                    │                   │                                      │
+              Agent tasks (xN)      GM task                              End Watcher
+              each: inbox queue     live subscriber,                     budgets /
+              + async think loop    warns, ejects,                       quiescence /
+                    │               calls time                           timeout
+                    └───────────────┴──────────────────┬───────────────────────┘
+                                                       │
+                                                  Event Bus
+                                          (append-only log, fan-out
+                                           to per-subscriber inboxes)
+                                                       │
+                                                   Narrator
+                                          (once per round, at round end)
 ```
+
+Because everything runs on one asyncio event loop, appends to the log are atomic
+between awaits. No locks are needed anywhere.
 
 ## 4. Core data model
 
 ```
+Event
+  seq: int                    # monotonic, canonical ordering
+  round: int
+  sender_id: str
+  text: str
+  kind: agent_action | confession | gm_ruling | gm_announcement | narration
+  visibility: public | private
+  recipients: [agent_id]      # empty for public; empty for confessions
+  released: bool              # a private event promoted to public
+  timestamp: float
+
+Agent
+  id, name, personality_prompt
+  status: active | warned | paused | eliminated
+  memory: [str]               # what this agent has processed
+  warnings: int
+  connected_to: agent_id | None      # Mirror Pair
+  connection_note: str
+  actions_remaining: int      # reset from action_budget each round
+
 Show
   id, title, show_prompt, gm_prompt, rules_text
   status: setup | running | paused | ended
   current_round: int
-  max_rounds: int | None      # optional producer-set cap; None = unlimited, ends manually
-  stages: [Stage]            # optional, see §8
+  max_rounds: int | None       # None = unlimited, producer ends manually
   contestants: [Agent]
+  events: [Event]              # the full log, all rounds
+  narratives: {round: str}
 
-Agent
-  id, name, personality_prompt (from preset, editable)
-  status: active | warned | paused | eliminated
-  private_memory: [str]       # agent's own running summary/notes
-  warnings: int
-
-Message
-  id, round, sender_id
-  visibility: "public" | "private"
-  recipients: [agent_id]       # only when private
-  released: bool                # true once leaked/made public
-  text
-  kind: "action" | "gm_ruling" | "narration"
-
-RoundLog
-  round_number, messages: [Message], narrative: str
+RoundConfig
+  action_budget: int = 4          # max acts per agent per round (cost ceiling)
+  debounce_seconds: float = 0.8   # batch window before an agent thinks
+  cooldown_seconds: float = 3.0   # forced gap after an agent acts
+  quiescence_seconds: float = 5.0
+  round_timeout_seconds: float = 180.0
+  gm_review_every: int = 3        # GM wakes every N events it sees
 ```
 
 ## 5. Round lifecycle
 
-1. **Snapshot context per agent**: for each active, non-paused agent, build
-   its context = personality_prompt + own private_memory + all public
-   messages so far (incl. released ones) + private messages where it is
-   sender/recipient + any producer note targeted at it or the group.
-2. **Parallel agent calls**: `asyncio.gather` one OpenAI call per active
-   agent. Each call returns: one public action (required) and zero or more
-   private messages to named recipients, and optionally a "leak" flag on a
-   past private message it received (agent chooses to make it public).
-3. **Collect & resolve**: append public actions to the public log in fixed
-   agent order. File private messages into recipient inboxes for round N+1.
-   Any leaked message is marked `released = true` immediately and enters the
-   public log at this point.
-4. **GM review**: one OpenAI call, given `gm_prompt` + full round content
-   (public + private, full visibility) + rules_text. Returns: allow, or a
-   ruling (warn / eliminate) per agent, as a `gm_ruling` message (always
-   public).
-5. **Narrator pass**: one OpenAI call, given only public actions + GM
-   rulings from this round (never unreleased private content), returns a
-   short story paragraph appended to the show's story feed.
-6. **Broadcast**: push the round's public messages + GM rulings + narrative
-   over WebSocket. Private messages are pushed only to the producer/viewer
-   channel (see §6), never filtered into any agent's own next-round context
-   until released.
-7. Advance `current_round`; wait for the next "Advance Round" trigger (user
-   button) or stage-driven auto-pause (§8).
+A round is not a sequence of turns. It is a burst of concurrent activity that
+starts on a seed event and ends when one of the termination conditions fires.
 
-Eliminated agents are skipped in step 1-2 permanently. Paused agents are
-skipped in step 1-2 for the rounds they're paused, but their state persists.
+1. **Setup.** `current_round += 1`. Every active agent's `actions_remaining` is
+   reset to `action_budget`. One `asyncio.Task` is spawned per active agent, plus
+   one for the GM and one for the end watcher.
+2. **Kickoff.** Every inbox starts empty, so nothing would ever wake. The GM
+   publishes a round-opening announcement as a public event; it fans out to all
+   inboxes and wakes all agents at once.
+3. **Agent loop** (each agent, independently and concurrently):
+   - block on inbox until an event arrives
+   - sleep `debounce_seconds`, then drain **everything** now in the inbox
+   - one tool-calling LLM call with: personality + secret connection + show
+     state + own memory + the whole drained batch
+   - dispatch resulting tool calls to the bus, append batch to own memory
+   - `actions_remaining -= 1`, sleep `cooldown_seconds`, repeat
+4. **Agent tools:** `speak_public(text)`, `send_private(to, text)`,
+   `confess(text)`, `stay_silent()`. One wake may emit several calls, so an agent
+   can DM someone and address the house in the same breath. `stay_silent` is a
+   first-class action so an agent can decide something is not worth answering.
+5. **GM loop:** subscribes to everything including private events, wakes every
+   `gm_review_every` events, and has tools `warn(agent_id, reason)`,
+   `eject(agent_id, reason)`, `announce(text)`, `end_round(reason)`. GM rulings
+   publish as public events, so they fan out and wake the agents — an agent can
+   react to being warned mid-argument.
+6. **Termination** (§6 below). On stop, all agent and GM tasks are cancelled.
+7. **Narration.** Once per round, after the tasks stop, one LLM call turns the
+   round's public events and GM rulings into a story paragraph. Private events
+   that were never released are excluded from the narrator's input.
+8. **Snapshot.** Show state is written to `snapshots/{show_id}.json`.
 
-## 6. Two audiences, one log
+## 6. Ending a round
 
-- **Agent context** (fed to LLM calls): filtered per §5 step 1. This is the
-  in-world knowledge boundary.
-- **Viewer feed / story** (frontend "Live Round Feed" + "Full Story" tabs):
-  unfiltered — every public action, every private message (labeled
-  "viewers only"), every leak, every GM ruling, in full. Viewers are always
-  omniscient; this is the core entertainment mechanic (see mockup:
-  `glass-house-mockup.html`).
-- The producer control panel uses the same unfiltered feed as the viewer
-  (no separate "god mode" needed — producer *is* a viewer with extra
-  buttons).
+Two categories, and they behave differently.
 
-## 7. Agent lifecycle controls
+**Safety rails — always on, not configurable.**
 
-- **Pause**: sets `status = paused`. Skipped in round execution; resumes on
-  user action. Used for "user needs to interact/change a rule" moments.
-- **Kill (remove)**: sets `status = eliminated`. Permanent; excluded from
-  all future rounds. Triggered by user manually, or by GM ruling
-  (`eliminate` verdict) — GM has authority to do this unilaterally within
-  its `gm_prompt`-defined judgment.
-- **Warn**: GM-only outcome; increments `warnings`, no functional lockout,
-  but included in that agent's own context so it "knows" it's on notice.
+- **Action budget exhausted.** Every active agent has spent its `action_budget`.
+  This is the deterministic cost ceiling.
+- **Wall-clock timeout.** Hard stop at `round_timeout_seconds`, protecting
+  against a hung or very slow API call.
+- **Producer stop.** Human override. Takes effect immediately, cancelling
+  in-flight calls.
 
-## 8. Stages (stretch goal, build only if core loop is solid early)
+**Dramatic conditions — this is show design.**
 
-A `Stage` is `{name, end_criteria_text}`. When defined, the round loop
-checks stage end criteria after each round via a lightweight LLM check
-("has this stage's end criteria been met, given the round log?"); if yes,
-show auto-transitions to `status = paused` with a "stage complete" banner,
-and waits for the user to start the next stage. Stages are optional — a
-show with none just runs continuous rounds until manually ended.
+- **GM calls time.** The `end_round(reason)` tool. This is the primary intended
+  path: the GM sees every event and ends the round when the drama peaks rather
+  than when a counter runs out.
+- **Quiescence.** The conversation genuinely died.
+
+**The quiescence definition matters.** "No events for N seconds" is a bug: if all
+agents are simultaneously waiting on slow LLM calls, the bus goes silent and the
+round would end mid-thought. Quiescence requires **all three**: no new events for
+`quiescence_seconds`, `bus.in_flight == 0`, and every inbox empty. The bus keeps
+an in-flight counter incremented before each LLM call and decremented after.
+
+Precedence: first condition to fire wins. Producer stop cancels in-flight calls
+immediately; every other condition lets in-flight calls finish and publish, so a
+half-formed action is not lost.
+
+## 7. Two audiences, one log
+
+- **Agent context** (fed to LLM calls): filtered by the bus at fan-out time. An
+  agent's inbox only ever receives public events, released events, and private
+  events where it is a recipient. It never receives its own events back.
+- **GM context:** sees everything, including unreleased private events and
+  confessions.
+- **Viewer feed and story** (frontend): unfiltered. Every public event, every
+  private DM, every confession, every GM ruling. Viewers are always omniscient;
+  this is the core entertainment mechanic.
+
+**Releasing.** A private event can be promoted to public by setting
+`released = true`, either by an agent leaking it or by the producer using the
+reveal control. Once released it is visible to all agents from that point on. It
+is never retroactively hidden from viewers, who already saw it.
+
+## 8. Agent lifecycle controls
+
+- **Pause.** `status = paused`. The agent's loop holds its current batch and
+  stops acting, but its inbox keeps filling. On resume it processes everything it
+  missed at once — a paused agent comes back and reacts to the whole argument it
+  slept through.
+- **Kill.** `status = eliminated`. Task cancelled, unsubscribed from the bus,
+  excluded from all future rounds. Triggered by the producer or by a GM `eject`.
+- **Warn.** GM-only. Increments `warnings`, sets `status = warned`, no functional
+  lockout, but the ruling is a public event so the agent sees it and can respond.
 
 ## 9. Frontend (React)
 
-Screens, in priority order:
-
-1. **Show Setup** — show_prompt textarea, gm_prompt textarea, rules_text,
-   pick 5 of the preset agent pool (editable personality_prompt per pick).
-2. **Live Room** — the two-tab view from the mockup: Live Round Feed
-   (per-round chat, POV toggle optional/stretch) + Full Story tab. Roster
-   sidebar with status pills. "Advance Round" button. Producer note input
-   (group-wide; per-agent targeting is stretch).
-3. **Controls** — pause/resume/kill buttons per agent, visible inline in
-   the roster sidebar.
+1. **Show Setup** — title, rounds cap, show/GM/rules prompt textareas, pick 5 of
+   the preset pool, optionally define secret connections.
+2. **Live Room** — the roster with status pills and pause/resume/kill controls,
+   a Start Round button, a producer Stop button, and the live event feed
+   streaming over WebSocket as events are published.
+3. **Story** — the accumulated per-round narratives, read as an episode recap.
 
 ## 10. Build order for 1.5 days (4 people)
 
-1. Data model + in-memory Show/Agent/Message classes + JSON snapshot (own by 1 person).
-2. Agent Runner + OpenAI integration + parallel round execution (own by 1 person).
-3. GM Runner + Narrator Runner, chained after round resolution (own by 1 person).
-4. FastAPI routes + WebSocket broadcast + React frontend (own by 1 person, can start against a mocked API contract in parallel with #1-3).
+1. Models + event bus + store (owner A).
+2. Tool-calling LLM client + agent loop (owner B).
+3. GM loop + narrator + round supervisor (owner C).
+4. FastAPI + WebSocket streaming + React frontend (owner D, can start against the
+   API contract in parallel).
 
-## 11. Explicit MVP cut list (stretch only, in this order)
+## 11. Explicit cut list (stretch only, in this order)
 
-1. Stage/phase system (§8).
-2. Per-agent-targeted producer notes (group-wide only in MVP).
-3. Mid-show rule-editing UI (rules_text is set once at show creation for MVP;
-   editing it is just re-running Show Setup pre-launch).
-4. POV toggle in the live viewer UI (nice for the pitch demo, not required
-   for the core loop to function — the visibility model exists in the data
-   whether or not the toggle UI exists).
+1. Stage/phase system with auto-pause at stage boundaries.
+2. Per-agent-targeted producer notes injected mid-round.
+3. Mid-show rule editing.
+4. POV toggle in the viewer UI (the visibility model already supports it; only
+   the UI affordance is missing — see `glass-house-mockup.html`).
+5. Loyalty ledger — a trust/suspicion score per agent pair fed back into context.
 
-## 12. Out of scope entirely for this hackathon
+## 12. Out of scope entirely
 
-- Persistent database, auth, multi-show history, deployment/hosting concerns
-  beyond running locally for the demo.
-- Custom personality authoring beyond editing a preset's prompt text.
+- Persistent database, auth, multi-show history, deployment beyond local run.
+- Team/captain structures, scored challenges, and anything depending on them
+  (moles reporting to opposing captains, cross-team alliance rounds, underdog
+  clauses).
+- A separate Secret Keeper agent. Hidden agendas live in the agent's own
+  personality prompt rather than costing an extra LLM call per round.
