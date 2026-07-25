@@ -32,8 +32,27 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
     fireEvent.click(screen.getByRole("button", { name: /start round/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar", {}));
     expect(onShowUpdated).toHaveBeenCalled();
+  });
+
+  it("start round sends opening brief and clears the field", async () => {
+    const spy = vi.spyOn(api, "startRound").mockResolvedValue({ round: 2, narrative: "y" });
+    const onShowUpdated = vi.fn();
+
+    render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
+    fireEvent.change(screen.getByLabelText(/round brief/i), {
+      target: { value: "Footprints by the back door." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start round/i }));
+
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith("sheesha-ghar", {
+        opening_brief: "Footprints by the back door.",
+      })
+    );
+    expect(onShowUpdated).toHaveBeenCalled();
+    expect(screen.getByLabelText(/round brief/i)).toHaveValue("");
   });
 
   it("stop round calls the stop API", async () => {
@@ -53,5 +72,24 @@ describe("LiveRoom", () => {
     fireEvent.click(screen.getByRole("button", { name: /kill vikram/i }));
 
     await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar", "vikram"));
+  });
+
+  it("inject clue posts text and clears the field", async () => {
+    const spy = vi.spyOn(api, "injectEvent").mockResolvedValue({
+      seq: 1, kind: "producer_note", text: "A bloody handkerchief.",
+    });
+    const onShowUpdated = vi.fn();
+
+    render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
+    fireEvent.change(screen.getByLabelText(/inject public clue/i), {
+      target: { value: "A bloody handkerchief." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /inject clue/i }));
+
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith("sheesha-ghar", "A bloody handkerchief.")
+    );
+    expect(onShowUpdated).toHaveBeenCalled();
+    expect(screen.getByLabelText(/inject public clue/i)).toHaveValue("");
   });
 });

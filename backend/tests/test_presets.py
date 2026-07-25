@@ -19,6 +19,9 @@ def test_defaults_describe_the_murder_blame_premise():
     assert "Ramesh Malhotra" in DEFAULT_SHOW_PROMPT
     assert "killer" in DEFAULT_SHOW_PROMPT.lower()
     assert "blame" in DEFAULT_GM_PROMPT.lower()
+    assert "missing" in DEFAULT_SHOW_PROMPT.lower()
+    assert "one of the five" in DEFAULT_RULES_TEXT.lower()
+    assert "outsiders" in DEFAULT_GM_PROMPT.lower()
 
 
 def test_preset_pool_has_five_unique_murder_cast():
@@ -26,9 +29,13 @@ def test_preset_pool_has_five_unique_murder_cast():
     ids = {p["id"] for p in PRESET_AGENT_PERSONALITIES}
     assert ids == MURDER_IDS
     for preset in PRESET_AGENT_PERSONALITIES:
+        prompt = preset["personality_prompt"].lower()
         assert preset["name"] and preset["personality_prompt"]
-        assert "do not know who the killer is" in preset["personality_prompt"].lower() \
-            or "don't know who the killer is" in preset["personality_prompt"].lower()
+        assert "do not know who the killer is" in prompt \
+            or "don't know who the killer is" in prompt
+        assert "2 to 4 short sentences" in prompt
+        assert "mysterious outsiders" in prompt
+        assert "betrayal loop" in prompt
 
 
 def test_build_preset_agent_returns_active_agent():

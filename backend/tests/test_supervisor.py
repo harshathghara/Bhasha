@@ -61,6 +61,27 @@ async def test_run_round_publishes_kickoff_and_runs_agents():
 
 
 @pytest.mark.asyncio
+async def test_run_round_publishes_opening_brief_after_kickoff():
+    show = make_show()
+    bus = EventBus(show)
+    brief = "A bloody handkerchief under the sofa."
+
+    await asyncio.wait_for(
+        run_round(
+            show, bus, SilentClient(), fast_config(),
+            opening_brief=brief,
+        ),
+        timeout=10,
+    )
+
+    assert show.events[0].kind == EventKind.GM_ANNOUNCEMENT
+    assert show.events[1].kind == EventKind.PRODUCER_NOTE
+    assert show.events[1].sender_id == "producer"
+    assert show.events[1].text == brief
+    assert show.events[1].round == 1
+
+
+@pytest.mark.asyncio
 async def test_run_round_ends_on_quiescence_when_agents_stay_silent():
     show = make_show()
     bus = EventBus(show)

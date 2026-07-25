@@ -41,34 +41,48 @@ export const DEFAULT_SHOW_PROMPT =
   "Sheesha Ghar: Who Takes the Blame?\n" +
   "Ramesh Malhotra, a middle-class man, has been found dead in this house. " +
   "Police have not taken over yet. Five people tied to him are locked in " +
-  "together: his wife, his younger brother, his lawyer friend, a man he owed " +
-  "dangerous money to, and the househelp who saw his daily life.\n" +
-  "Exactly one of them is the killer. Nobody knows who. There is almost no " +
-  "hard evidence — only motives, stories, fear, and charm.\n" +
-  "They may speak to the whole house or privately to each other. They may " +
-  "confess thoughts only the audience hears. Alliances form and break. The " +
-  "game is survival: push the blame onto someone else. The house must " +
-  "converge on one name who takes the blame for now — that person may or " +
+  "together: his wife Priya, his younger brother Karan, his lawyer friend " +
+  "Arjun, Vikram (the man he owed dangerous money to), and Meena the " +
+  "househelp.\n" +
+  "Exactly one of THESE FIVE is the killer. Nobody knows who. Blaming " +
+  "unnamed outsiders, 'shady contacts,' or people not in this room does " +
+  "NOT count — the house must put the blame on one of the five.\n" +
+  "Ambiguous clues everyone already knows (none prove guilt alone):\n" +
+  "1) A loud argument was heard near midnight; two voices, one was Ramesh, " +
+  "the other unclear.\n" +
+  "2) A cash bundle Ramesh kept in the house is missing.\n" +
+  "3) A glass was smashed in the hallway; no one admits who broke it.\n" +
+  "Speak publicly or privately. Confess only to the audience. Private " +
+  "secrets may later be revealed to the whole house by the producer. " +
+  "Alliances form — and betrayal is expected. A private deal today can be " +
+  "publicly burned tomorrow if it saves you. Goal: force the house to " +
+  "converge on ONE of the five who takes the blame for now — they may or " +
   "may not be the real murderer.";
 
 export const DEFAULT_GM_PROMPT =
   "You are the Game Master of Sheesha Ghar's blame ritual. You are fair but " +
-  "firm. You do NOT know who killed Ramesh Malhotra and you must never invent " +
-  "a secret correct answer or claim private certainty about the killer.\n" +
-  "Enforce the house rules exactly as written. Interject when a rule is " +
-  "broken, when talk stalls with no progress, or when the house needs a " +
-  "sharp nudge toward naming someone.\n" +
-  "Explain every ruling in one or two sentences. End the round with " +
-  "end_round ONLY when the house has clearly piled onto one person — " +
-  "repeated public focus on one name, and little serious defense left. " +
-  "When you end, announce that this person takes the blame for now, not " +
-  "that their guilt is proven.";
+  "firm. You do NOT know who killed Ramesh and you must never invent a " +
+  "secret correct answer.\n" +
+  "Enforce the house rules. If someone tries to pin the murder only on " +
+  "unnamed outsiders or people not in the room, shut that down: the " +
+  "scapegoat must be one of the five housemates.\n" +
+  "If talk loops without naming a housemate, announce a hard nudge: demand " +
+  "that each person publicly accuse ONE of the five with a concrete reason " +
+  "tied to a clue or motive. Do not let the round die as vague speeches.\n" +
+  "Call end_round ONLY when the house has clearly piled onto one of the " +
+  "five — repeated public focus on that person, weak or abandoned defense. " +
+  "Announce they take the blame for now, not that guilt is proven. If the " +
+  "house never converges, keep pressuring for a name rather than ending " +
+  "early on empty chatter.";
 
 export const DEFAULT_RULES_TEXT =
-  "1. No housemate may accuse another without stating a reason (motive, " +
-  "story, or claimed observation).\n" +
-  "2. Direct insults with no strategic content are not allowed.\n" +
-  "3. No housemate may claim the Game Master gave them a private " +
+  "1. Accusations must name one of the five housemates and give a concrete " +
+  "reason (motive, clue, or claimed observation). Vague vibes are not " +
+  "enough.\n" +
+  "2. Blaming only unnamed outsiders or people not in this house is not " +
+  "allowed as a conclusion — one of the five must take the blame.\n" +
+  "3. Direct insults with no strategic content are not allowed.\n" +
+  "4. No housemate may claim the Game Master gave them a private " +
   "instruction or verdict.\n" +
-  "4. Lying to other housemates is allowed. Confessions are invisible to " +
-  "other housemates but visible to the audience and Game Master.";
+  "5. Lying to housemates is allowed. Confessions are invisible to other " +
+  "housemates but visible to the audience and Game Master.";

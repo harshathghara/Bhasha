@@ -5,7 +5,7 @@ import {
 } from "../presets";
 
 export default function ShowSetup({ onCreated }) {
-  const [title, setTitle] = useState("Sheesha Ghar — Who Takes the Blame?");
+  const [title, setTitle] = useState("Sheesha Ghar - Who Takes the Blame");
   const [showPrompt, setShowPrompt] = useState(DEFAULT_SHOW_PROMPT);
   const [gmPrompt, setGmPrompt] = useState(DEFAULT_GM_PROMPT);
   const [rulesText, setRulesText] = useState(DEFAULT_RULES_TEXT);

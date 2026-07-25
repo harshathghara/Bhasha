@@ -41,7 +41,7 @@ describe("ShowSetup", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "sheesha-ghar" }));
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Sheesha Ghar — Who Takes the Blame?",
+        title: "Sheesha Ghar - Who Takes the Blame",
         max_rounds: 6,
         agent_preset_ids: [
           "creditor", "wife", "lawyer", "brother", "househelp",
