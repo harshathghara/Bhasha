@@ -1,6 +1,6 @@
 import { MAP, MAP_WIDTH, MAP_HEIGHT, TILE_SIZE } from "./map";
 import { pickRandomAdjacentTile, occupiedTiles } from "./movement";
-import { tileSourceRect, characterSourceRect } from "./sprites";
+import { tileSourceRect, characterSourceRect, FRAMES_PER_DIRECTION } from "./sprites";
 
 const WALK_DURATION_MS = 350;
 const MIN_PAUSE_MS = 800;
@@ -104,7 +104,7 @@ export class WorldEngine {
       const pixelX = (character.tileX + (toX - character.tileX) * progress) * TILE_SIZE;
       const pixelY = (character.tileY + (toY - character.tileY) * progress) * TILE_SIZE;
 
-      const frame = character.moving ? Math.floor(progress * 4) : 0;
+      const frame = character.moving ? Math.floor(progress * FRAMES_PER_DIRECTION) : 0;
       const { sx, sy, sw, sh } = characterSourceRect(character.direction, frame);
       const sheet = this.images.characters[character.spriteKey];
       ctx.drawImage(sheet, sx, sy, sw, sh, pixelX, pixelY, TILE_SIZE, TILE_SIZE);
