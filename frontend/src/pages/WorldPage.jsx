@@ -1,13 +1,41 @@
+import { useMemo, useState } from "react";
 import WorldView from "../components/WorldView";
+import { startRound } from "../api/client";
 
-export const PLACEHOLDER_CHARACTERS = [
-  { id: "slot-1", name: "Housemate 1", spriteKey: "slot-1", tileX: 2, tileY: 2 },
-  { id: "slot-2", name: "Housemate 2", spriteKey: "slot-2", tileX: 4, tileY: 2 },
-  { id: "slot-3", name: "Housemate 3", spriteKey: "slot-3", tileX: 6, tileY: 2 },
-  { id: "slot-4", name: "Housemate 4", spriteKey: "slot-4", tileX: 3, tileY: 5 },
-  { id: "slot-5", name: "Housemate 5", spriteKey: "slot-5", tileX: 6, tileY: 5 },
+const SPAWN_POSITIONS = [
+  { tileX: 2, tileY: 2 },
+  { tileX: 4, tileY: 2 },
+  { tileX: 6, tileY: 2 },
+  { tileX: 3, tileY: 5 },
+  { tileX: 6, tileY: 5 },
 ];
 
-export default function WorldPage() {
-  return <WorldView characters={PLACEHOLDER_CHARACTERS} />;
+export function buildCharacters(show) {
+  return show.contestants.map((contestant, index) => ({
+    id: contestant.id,
+    name: contestant.name,
+    spriteKey: `slot-${index + 1}`,
+    ...SPAWN_POSITIONS[index],
+  }));
+}
+
+export default function WorldPage({ show }) {
+  const [starting, setStarting] = useState(false);
+  const characters = useMemo(() => buildCharacters(show), [show]);
+
+  async function handleStart() {
+    setStarting(true);
+    try {
+      await startRound(show.id);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return (
+    <div>
+      <button onClick={handleStart} disabled={starting}>Start round</button>
+      <WorldView showId={show.id} characters={characters} />
+    </div>
+  );
 }
