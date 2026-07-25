@@ -1,0 +1,53 @@
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+async function request(path, options) {
+  const url = `${API_BASE}${path}`;
+  const response = options
+    ? await fetch(url, options)
+    : await fetch(url);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Request to ${path} failed`);
+  }
+  return response.json();
+}
+
+function post(path, body) {
+  const options = { method: "POST" };
+  if (body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  return request(path, options);
+}
+
+export function createShow(payload) {
+  return post("/shows", payload);
+}
+
+export function getShow(showId) {
+  return request(`/shows/${showId}`);
+}
+
+export function startRound(showId) {
+  return post(`/shows/${showId}/rounds`);
+}
+
+export function stopRound(showId) {
+  return post(`/shows/${showId}/stop`);
+}
+
+export function killAgent(showId, agentId) {
+  return post(`/shows/${showId}/agents/${agentId}/kill`);
+}
+
+export function releaseEvent(showId, seq) {
+  return post(`/shows/${showId}/events/${seq}/release`);
+}
+
+export function openEventSocket(showId, onEvent) {
+  const url = `${API_BASE.replace(/^http/, "ws")}/ws/${showId}`;
+  const socket = new WebSocket(url);
+  socket.onmessage = (message) => onEvent(JSON.parse(message.data));
+  return socket;
+}
