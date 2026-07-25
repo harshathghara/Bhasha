@@ -24,7 +24,7 @@ def test_defaults_describe_the_murder_blame_premise():
     assert "outsiders" in DEFAULT_GM_PROMPT.lower()
 
 
-def test_preset_pool_has_five_unique_murder_cast():
+def test_preset_pool_has_five_unique_murder_cast_personalities():
     assert len(PRESET_AGENT_PERSONALITIES) == 5
     ids = {p["id"] for p in PRESET_AGENT_PERSONALITIES}
     assert ids == MURDER_IDS

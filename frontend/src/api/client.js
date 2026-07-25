@@ -7,7 +7,11 @@ async function request(path, options) {
     : await fetch(url);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Request to ${path} failed`);
+    const detail = body.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((item) => item.msg || JSON.stringify(item)).join("; ")
+      : (detail || `Request to ${path} failed (${response.status})`);
+    throw new Error(typeof message === "string" ? message : JSON.stringify(message));
   }
   return response.json();
 }
