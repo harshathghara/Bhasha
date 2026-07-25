@@ -231,6 +231,36 @@ def test_format_event_prefixes_leakable_lines_with_seq():
     assert "[seq 2, PRIVATE from meera]" in user_prompt
 
 
+def test_format_event_does_not_leak_own_thought_framing_to_other_agents():
+    """Finding 2: a released confession must not read as 'your own private
+    thought' to agents who aren't the confessor."""
+    show = make_show()
+    bus = EventBus(show)
+    meera = show.get_agent("meera")
+    confession = bus.publish("vikram", "I am bluffing.", kind=EventKind.CONFESSION,
+                              visibility=Visibility.PRIVATE, recipients=[])
+    confession.released = True
+
+    _, user_prompt = build_agent_prompt(show, meera, bus, fast_config())
+
+    assert "your own private thought" not in user_prompt
+    assert "vikram: I am bluffing." in user_prompt
+
+
+def test_format_event_still_frames_unreleased_confession_as_own_thought_for_sender():
+    """Regression: the sender's own still-private confession keeps its
+    first-person framing."""
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+    bus.publish("vikram", "I am bluffing.", kind=EventKind.CONFESSION,
+                visibility=Visibility.PRIVATE, recipients=[])
+
+    _, user_prompt = build_agent_prompt(show, vikram, bus, fast_config())
+
+    assert "your own private thought" in user_prompt
+
+
 def test_dispatch_leak_message_reveals_a_witnessed_private_message():
     show = make_show()
     bus = EventBus(show)
@@ -279,6 +309,26 @@ def test_dispatch_leak_message_ignores_an_already_leaked_event():
     ])
 
     assert published == 0
+
+
+def test_dispatch_leak_message_with_bad_recipient_does_not_crash():
+    """Finding 1: a hallucinated recipient id used to raise KeyError out of
+    perform_leak, which would otherwise kill the agent's whole loop."""
+    show = make_show()
+    bus = EventBus(show)
+    vikram = show.get_agent("vikram")
+    original = bus.publish("vikram", "Ally?", visibility=Visibility.PRIVATE,
+                            recipients=["not-a-real-agent-id"])
+
+    published = dispatch_agent_calls(bus, vikram, [
+        {"name": "leak_message", "arguments": {"event_seq": original.seq}},
+    ])
+
+    assert published == 1
+    assert original.released is True
+    leak_events = [e for e in show.events if e.kind == EventKind.LEAK]
+    assert len(leak_events) == 1
+    assert "not-a-real-agent-id" in leak_events[0].text
 
 
 def test_dispatch_leak_message_ignores_an_unknown_seq():

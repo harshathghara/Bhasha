@@ -47,7 +47,7 @@ def _format_event(event, agent) -> str:
         return f"[GAME MASTER] {event.text}"
     if event.kind == EventKind.LEAK:
         return f"[LEAKED] {event.text}"
-    if event.kind == EventKind.CONFESSION:
+    if event.kind == EventKind.CONFESSION and event.sender_id == agent.id and not event.released:
         return f"[seq {event.seq}, your own private thought] {event.text}"
     if event.sender_id == agent.id:
         if event.visibility == Visibility.PRIVATE and not event.released:
@@ -78,7 +78,7 @@ def dispatch_agent_calls(bus, agent, calls) -> int:
                 continue
             try:
                 perform_leak(bus, target, agent.id)
-            except ValueError:
+            except (ValueError, KeyError, IndexError):
                 continue
         else:
             continue

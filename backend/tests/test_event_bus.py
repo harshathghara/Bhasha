@@ -209,3 +209,37 @@ async def test_perform_leak_rejects_a_public_event():
 
     with pytest.raises(ValueError):
         perform_leak(bus, original, GM_ID)
+
+
+@pytest.mark.asyncio
+async def test_perform_leak_falls_back_to_raw_id_for_unknown_recipient():
+    """A hallucinated/nonexistent recipient id must not crash the leak; it
+    should just show up verbatim instead of a real display name."""
+    show = make_show_with_agents()
+    bus = EventBus(show)
+    original = bus.publish("vikram", "Ally with me.", visibility=Visibility.PRIVATE,
+                            recipients=["not-a-real-agent-id"])
+
+    updated, leak_event = perform_leak(bus, original, GM_ID)
+
+    assert updated.released is True
+    assert leak_event.text == (
+        'It has been leaked that Vikram said "Ally with me." to not-a-real-agent-id.'
+    )
+
+
+@pytest.mark.asyncio
+async def test_perform_leak_handles_empty_recipients_without_indexerror():
+    """A private AGENT_ACTION event with no recipients (reachable via the HTTP
+    leak endpoint on any stored event) must not raise IndexError."""
+    show = make_show_with_agents()
+    bus = EventBus(show)
+    original = bus.publish("vikram", "Talking to the void.",
+                            visibility=Visibility.PRIVATE, recipients=[])
+
+    updated, leak_event = perform_leak(bus, original, GM_ID)
+
+    assert updated.released is True
+    assert leak_event.text == (
+        'It has been leaked that Vikram said "Talking to the void." to someone.'
+    )

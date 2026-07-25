@@ -74,6 +74,15 @@ class EventBus:
         return self.can_see(event, subscriber_id)
 
 
+def _display_name(show, agent_id):
+    """Resolve an agent id to a readable name, falling back to the raw id
+    if it doesn't match a real agent (e.g. an LLM hallucinated it)."""
+    try:
+        return show.get_agent(agent_id).name
+    except KeyError:
+        return agent_id
+
+
 def perform_leak(bus: "EventBus", event: Event, leaking_sender_id: str) -> tuple:
     """Reveal a private message or confession as a new public LEAK event.
     Marks the original event released so agent context and the narrator
@@ -87,11 +96,12 @@ def perform_leak(bus: "EventBus", event: Event, leaking_sender_id: str) -> tuple
     if event.released:
         raise ValueError(f"Event {event.seq} has already been leaked")
 
-    sender_name = bus.show.get_agent(event.sender_id).name
+    sender_name = _display_name(bus.show, event.sender_id)
     if event.kind == EventKind.CONFESSION:
         text = f'It has been leaked that {sender_name} confessed: "{event.text}"'
     else:
-        recipient_name = bus.show.get_agent(event.recipients[0]).name
+        recipient_id = event.recipients[0] if event.recipients else None
+        recipient_name = _display_name(bus.show, recipient_id) if recipient_id else "someone"
         text = f'It has been leaked that {sender_name} said "{event.text}" to {recipient_name}.'
 
     event.released = True
