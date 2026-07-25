@@ -37,6 +37,20 @@ AGENT_TOOLS = [
         ["text"],
     ),
     _function(
+        "leak_message",
+        "Reveal a private message or confession you know about to the "
+        "whole house. Use this if it fits your personality and goals — "
+        "it will be publicly announced and everyone will react to it.",
+        {
+            "event_seq": {
+                "type": "integer",
+                "description": "The seq number of the private message or "
+                "confession to leak, from your own knowledge so far.",
+            },
+        },
+        ["event_seq"],
+    ),
+    _function(
         "stay_silent",
         "Decide that nothing here is worth responding to right now.",
         {},
