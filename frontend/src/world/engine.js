@@ -2,7 +2,7 @@ import { MAP, MAP_WIDTH, MAP_HEIGHT, TILE_SIZE } from "./map";
 import { pickRandomAdjacentTile, occupiedTiles } from "./movement";
 import { tileSourceRect, characterSourceRect, FRAMES_PER_DIRECTION } from "./sprites";
 import { mapEvent } from "./eventMapping";
-import { findPathToAdjacent } from "./pathfinding";
+import { findPathBetween } from "./pathfinding";
 import {
   INTERACTION_DURATION_MS,
   isCommandReady,
@@ -113,7 +113,7 @@ export class WorldEngine {
       }
 
       if (character.queue.length > 0 && isCommandReady(character, charactersById)) {
-        startCommand(character, charactersById, findPathToAdjacent);
+        startCommand(character, charactersById, findPathBetween);
         continue;
       }
 

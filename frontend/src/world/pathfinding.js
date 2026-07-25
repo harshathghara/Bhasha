@@ -7,17 +7,14 @@ const NEIGHBOR_DELTAS = [
   { dx: 1, dy: 0 },
 ];
 
-function isAdjacent(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
-}
-
-export function findPathToAdjacent(start, goal) {
-  if (start.x === goal.x && start.y === goal.y) return [];
-  if (isAdjacent(start, goal)) return [];
+// Full connected path from start to goal, inclusive of both endpoints.
+// Returns [start] if start === goal, or null if goal is unreachable.
+export function findPathBetween(start, goal) {
+  if (start.x === goal.x && start.y === goal.y) return [start];
 
   const key = (p) => `${p.x},${p.y}`;
   const visited = new Set([key(start)]);
-  const queue = [{ pos: start, path: [] }];
+  const queue = [{ pos: start, path: [start] }];
 
   while (queue.length > 0) {
     const { pos, path } = queue.shift();
@@ -28,7 +25,7 @@ export function findPathToAdjacent(start, goal) {
       if (!isWalkable(next.x, next.y)) continue;
 
       const nextPath = [...path, next];
-      if (isAdjacent(next, goal)) return nextPath;
+      if (next.x === goal.x && next.y === goal.y) return nextPath;
 
       visited.add(key(next));
       queue.push({ pos: next, path: nextPath });

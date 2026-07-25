@@ -3,10 +3,12 @@ import {
   INTERACTION_DURATION_MS,
   isCommandReady,
   startCommand,
+  buildMeetPlan,
   advanceWalkingToInteract,
   advanceInteracting,
   directionToward,
 } from "./interactions";
+import { findPathBetween } from "./pathfinding";
 
 function baseCharacter(overrides = {}) {
   return {
@@ -44,44 +46,101 @@ describe("isCommandReady", () => {
   });
 });
 
+describe("buildMeetPlan", () => {
+  it("returns empty paths for both sides when already adjacent", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 2, tileY: 1 });
+    const byId = new Map([["a", sender], ["b", recipient]]);
+
+    const plan = buildMeetPlan(command, byId, findPathBetween);
+
+    expect(plan).toEqual({ senderPath: [], recipientPath: [] });
+  });
+
+  it("splits a shared route so both halves land on adjacent tiles", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 6, tileY: 1 });
+    const byId = new Map([["a", sender], ["b", recipient]]);
+
+    const plan = buildMeetPlan(command, byId, findPathBetween);
+
+    expect(plan.senderPath.length).toBeGreaterThan(0);
+    expect(plan.recipientPath.length).toBeGreaterThan(0);
+
+    const senderEnd = plan.senderPath[plan.senderPath.length - 1];
+    const recipientEnd = plan.recipientPath[plan.recipientPath.length - 1];
+    const dist = Math.abs(senderEnd.x - recipientEnd.x) + Math.abs(senderEnd.y - recipientEnd.y);
+    expect(dist).toBe(1);
+  });
+
+  it("returns null paths when no route exists", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 2, tileY: 1 });
+    const byId = new Map([["a", sender], ["b", recipient]]);
+
+    const plan = buildMeetPlan(command, byId, () => null);
+
+    expect(plan).toEqual({ senderPath: null, recipientPath: null });
+  });
+});
+
 describe("startCommand", () => {
   it("begins interacting immediately for a public command, facing unchanged", () => {
     const command = { id: 1, kind: "public", senderId: "a", text: "hi" };
     const character = baseCharacter({ queue: [command], direction: "left" });
 
-    startCommand(character, new Map([["a", character]]), () => []);
+    startCommand(character, new Map([["a", character]]), () => null);
 
     expect(character.mode).toBe("interacting");
     expect(character.direction).toBe("left");
     expect(character.interactingRemainingMs).toBe(INTERACTION_DURATION_MS);
   });
 
-  it("walks toward the partner for a private command when a path exists", () => {
+  it("walks the sender along its half of the shared route toward the recipient", () => {
     const command = { id: 1, kind: "private", senderId: "a", recipientId: "b", text: "psst" };
     const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1, queue: [command] });
     const recipient = baseCharacter({ id: "b", tileX: 5, tileY: 1 });
     const byId = new Map([["a", sender], ["b", recipient]]);
-    const fakePath = [{ x: 2, y: 1 }, { x: 3, y: 1 }];
 
-    startCommand(sender, byId, () => fakePath);
+    startCommand(sender, byId, findPathBetween);
 
     expect(sender.mode).toBe("walking-to-interact");
-    expect(sender.path).toEqual(fakePath);
+    expect(sender.path.length).toBeGreaterThan(0);
   });
 
-  it("skips walking and interacts in place when already adjacent (empty path)", () => {
+  it("caches the meet plan on the command so both sides use the same shared route", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b", text: "psst" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1, queue: [command] });
+    const recipient = baseCharacter({ id: "b", tileX: 6, tileY: 1, queue: [command] });
+    const byId = new Map([["a", sender], ["b", recipient]]);
+
+    startCommand(sender, byId, findPathBetween);
+    const planAfterSender = command.meetPlan;
+    startCommand(recipient, byId, () => {
+      throw new Error("should not recompute the route once cached");
+    });
+
+    expect(command.meetPlan).toBe(planAfterSender);
+    expect(recipient.mode).toBe("walking-to-interact");
+    expect(recipient.path.length).toBeGreaterThan(0);
+  });
+
+  it("skips walking and interacts in place when already adjacent", () => {
     const command = { id: 1, kind: "private", senderId: "a", recipientId: "b", text: "psst" };
     const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1, queue: [command] });
     const recipient = baseCharacter({ id: "b", tileX: 2, tileY: 1 });
     const byId = new Map([["a", sender], ["b", recipient]]);
 
-    startCommand(sender, byId, () => []);
+    startCommand(sender, byId, findPathBetween);
 
     expect(sender.mode).toBe("interacting");
     expect(sender.direction).toBe("right");
   });
 
-  it("falls back to interacting in place when no path exists", () => {
+  it("falls back to interacting in place when no route exists", () => {
     const command = { id: 1, kind: "private", senderId: "a", recipientId: "b", text: "psst" };
     const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1, queue: [command] });
     const recipient = baseCharacter({ id: "b", tileX: 8, tileY: 6 });
@@ -90,6 +149,34 @@ describe("startCommand", () => {
     startCommand(sender, byId, () => null);
 
     expect(sender.mode).toBe("interacting");
+  });
+});
+
+describe("full convergence with the real pathfinder", () => {
+  it("walks both participants to tiles adjacent to each other, not just their partner's stale starting snapshot", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b", text: "psst" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1, queue: [command] });
+    const recipient = baseCharacter({ id: "b", tileX: 8, tileY: 6, queue: [command] });
+    const byId = new Map([["a", sender], ["b", recipient]]);
+
+    startCommand(sender, byId, findPathBetween);
+    startCommand(recipient, byId, findPathBetween);
+
+    function runToCompletion(character) {
+      let ticks = 0;
+      while (character.mode === "walking-to-interact" && ticks < 200) {
+        advanceWalkingToInteract(character, 100, byId);
+        ticks += 1;
+      }
+    }
+
+    runToCompletion(sender);
+    runToCompletion(recipient);
+
+    expect(sender.mode).toBe("interacting");
+    expect(recipient.mode).toBe("interacting");
+    const dist = Math.abs(sender.tileX - recipient.tileX) + Math.abs(sender.tileY - recipient.tileY);
+    expect(dist).toBe(1);
   });
 });
 

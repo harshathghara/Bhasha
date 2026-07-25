@@ -27,6 +27,37 @@ export function beginInteracting(character, direction) {
   character.path = [];
 }
 
+// Both participants need to converge on the SAME fixed meeting point, computed
+// once from a single shared route between their starting tiles and cached on
+// the command object (so whichever character's startCommand runs first computes
+// it, and the other reuses it). Splitting the route down the middle and having
+// each side walk their own half guarantees they end up adjacent to each other,
+// regardless of how the room's other characters are wandering around them —
+// unlike having each side independently path toward the other's starting
+// snapshot, which does NOT reliably converge once both are moving at once.
+export function buildMeetPlan(command, charactersById, findPath) {
+  const sender = charactersById.get(command.senderId);
+  const recipient = charactersById.get(command.recipientId);
+  const route = findPath(
+    { x: sender.tileX, y: sender.tileY },
+    { x: recipient.tileX, y: recipient.tileY },
+  );
+
+  if (!route) {
+    return { senderPath: null, recipientPath: null };
+  }
+
+  if (route.length <= 2) {
+    return { senderPath: [], recipientPath: [] };
+  }
+
+  const splitIndex = Math.floor(route.length / 2);
+  return {
+    senderPath: route.slice(1, splitIndex + 1),
+    recipientPath: route.slice(splitIndex + 1, route.length - 1).reverse(),
+  };
+}
+
 export function startCommand(character, charactersById, findPath) {
   const command = character.queue[0];
   character.activeCommand = command;
@@ -38,20 +69,24 @@ export function startCommand(character, charactersById, findPath) {
 
   const partnerId = command.senderId === character.id ? command.recipientId : command.senderId;
   const partner = charactersById.get(partnerId);
-  const path = findPath(
-    { x: character.tileX, y: character.tileY },
-    { x: partner.tileX, y: partner.tileY },
-  );
 
-  if (path && path.length > 0) {
-    character.mode = "walking-to-interact";
-    character.path = path;
-  } else {
+  if (!command.meetPlan) {
+    command.meetPlan = buildMeetPlan(command, charactersById, findPath);
+  }
+
+  const isSender = command.senderId === character.id;
+  const myPath = isSender ? command.meetPlan.senderPath : command.meetPlan.recipientPath;
+
+  if (myPath === null || myPath.length === 0) {
     beginInteracting(
       character,
       directionToward(character.tileX, character.tileY, partner.tileX, partner.tileY),
     );
+    return;
   }
+
+  character.mode = "walking-to-interact";
+  character.path = myPath;
 }
 
 export function advanceWalkingToInteract(character, deltaMs, charactersById) {
