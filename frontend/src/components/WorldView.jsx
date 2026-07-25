@@ -3,6 +3,25 @@ import { MAP_WIDTH, MAP_HEIGHT, TILE_SIZE } from "../world/map";
 import { loadImage } from "../world/sprites";
 import { WorldEngine } from "../world/engine";
 
+const shellStyle = {
+  width: "100vw",
+  height: "100vh",
+  margin: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "#1a1a1e",
+  overflow: "hidden",
+};
+
+const canvasStyle = {
+  // Largest size that fits the viewport while keeping the 10:8 map aspect ratio.
+  width: "min(100vw, calc(100vh * 10 / 8))",
+  height: "min(100vh, calc(100vw * 8 / 10))",
+  imageRendering: "pixelated",
+  display: "block",
+};
+
 export default function WorldView({ characters }) {
   const canvasRef = useRef(null);
   const [loadError, setLoadError] = useState(null);
@@ -29,6 +48,7 @@ export default function WorldView({ characters }) {
         });
 
         const ctx = canvasRef.current.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
         engine = new WorldEngine(ctx, characters, { tileset, characters: characterSheets });
         engine.start();
       } catch (error) {
@@ -45,15 +65,22 @@ export default function WorldView({ characters }) {
   }, [characters]);
 
   if (loadError) {
-    return <p role="alert">World assets failed to load: {loadError}</p>;
+    return (
+      <div style={shellStyle}>
+        <p role="alert">World assets failed to load: {loadError}</p>
+      </div>
+    );
   }
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={MAP_WIDTH * TILE_SIZE}
-      height={MAP_HEIGHT * TILE_SIZE}
-      data-testid="world-canvas"
-    />
+    <div style={shellStyle} data-testid="world-shell">
+      <canvas
+        ref={canvasRef}
+        width={MAP_WIDTH * TILE_SIZE}
+        height={MAP_HEIGHT * TILE_SIZE}
+        style={canvasStyle}
+        data-testid="world-canvas"
+      />
+    </div>
   );
 }

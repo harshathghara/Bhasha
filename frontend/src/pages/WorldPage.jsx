@@ -9,10 +9,5 @@ export const PLACEHOLDER_CHARACTERS = [
 ];
 
 export default function WorldPage() {
-  return (
-    <div>
-      <h1>The House</h1>
-      <WorldView characters={PLACEHOLDER_CHARACTERS} />
-    </div>
-  );
+  return <WorldView characters={PLACEHOLDER_CHARACTERS} />;
 }
