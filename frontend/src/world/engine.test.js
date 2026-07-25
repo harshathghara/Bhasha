@@ -102,3 +102,130 @@ describe("WorldEngine start/stop", () => {
     expect(cancelFrame).toHaveBeenCalledWith(42);
   });
 });
+
+describe("WorldEngine.handleEvent", () => {
+  it("enqueues a public command onto the sender only", () => {
+    const sender = baseCharacter({ id: "a" });
+    const other = baseCharacter({ id: "b", tileX: 5, tileY: 5 });
+    const engine = new WorldEngine(fakeContext(), [sender, other], fakeImages());
+
+    engine.handleEvent({
+      seq: 1, sender_id: "a", text: "hi all", kind: "agent_action",
+      visibility: "public", recipients: [],
+    });
+
+    expect(engine.characters[0].queue).toHaveLength(1);
+    expect(engine.characters[1].queue).toHaveLength(0);
+  });
+
+  it("enqueues a private command onto both sender and recipient", () => {
+    const sender = baseCharacter({ id: "a" });
+    const recipient = baseCharacter({ id: "b", tileX: 5, tileY: 5 });
+    const engine = new WorldEngine(fakeContext(), [sender, recipient], fakeImages());
+
+    engine.handleEvent({
+      seq: 1, sender_id: "a", text: "psst", kind: "agent_action",
+      visibility: "private", recipients: ["b"],
+    });
+
+    expect(engine.characters[0].queue).toHaveLength(1);
+    expect(engine.characters[1].queue).toHaveLength(1);
+    expect(engine.characters[0].queue[0].id).toBe(engine.characters[1].queue[0].id);
+  });
+
+  it("sets a GM banner without touching any character", () => {
+    const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages());
+
+    engine.handleEvent({
+      seq: 1, sender_id: "game_master", text: "Vikram is warned.", kind: "gm_ruling",
+      visibility: "public", recipients: [],
+    });
+
+    expect(engine.gmBanner).toEqual({ text: "Vikram is warned.", remainingMs: 3500 });
+    expect(engine.characters[0].queue).toHaveLength(0);
+  });
+
+  it("ignores narration events", () => {
+    const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages());
+
+    engine.handleEvent({
+      seq: 1, sender_id: "narrator", text: "A tense round.", kind: "narration",
+      visibility: "public", recipients: [],
+    });
+
+    expect(engine.gmBanner).toBeNull();
+    expect(engine.characters[0].queue).toHaveLength(0);
+  });
+});
+
+describe("WorldEngine public/confession interaction", () => {
+  it("moves a character with a ready public command straight into interacting, skipping wander", () => {
+    const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages(), { rng: () => 0 });
+    engine.characters[0].pauseRemainingMs = 0;
+    engine.handleEvent({
+      seq: 1, sender_id: "slot-1", text: "hello house", kind: "agent_action",
+      visibility: "public", recipients: [],
+    });
+
+    engine.update(16);
+
+    const character = engine.characters[0];
+    expect(character.mode).toBe("interacting");
+    expect(character.moving).toBe(false);
+  });
+
+  it("returns to wander once the interaction duration elapses", () => {
+    const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages(), { rng: () => 0 });
+    engine.characters[0].pauseRemainingMs = 0;
+    engine.handleEvent({
+      seq: 1, sender_id: "slot-1", text: "hello house", kind: "agent_action",
+      visibility: "public", recipients: [],
+    });
+    engine.update(16);
+
+    engine.update(4000);
+
+    const character = engine.characters[0];
+    expect(character.mode).toBe("wander");
+    expect(character.queue).toHaveLength(0);
+  });
+});
+
+describe("WorldEngine private message interaction", () => {
+  it("walks both participants toward each other before interacting", () => {
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 5, tileY: 1 });
+    const engine = new WorldEngine(fakeContext(), [sender, recipient], fakeImages(), { rng: () => 0 });
+
+    engine.handleEvent({
+      seq: 1, sender_id: "a", text: "psst", kind: "agent_action",
+      visibility: "private", recipients: ["b"],
+    });
+
+    engine.update(16);
+
+    expect(engine.characters[0].mode).toBe("walking-to-interact");
+    expect(engine.characters[1].mode).toBe("walking-to-interact");
+  });
+});
+
+describe("WorldEngine onFrame", () => {
+  it("reports a bubble for the sender of an interacting public command", () => {
+    const onFrame = vi.fn();
+    const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages(), {
+      rng: () => 0, onFrame,
+    });
+    engine.characters[0].pauseRemainingMs = 0;
+    engine.handleEvent({
+      seq: 1, sender_id: "slot-1", text: "hello house", kind: "agent_action",
+      visibility: "public", recipients: [],
+    });
+    engine.update(16);
+
+    engine.draw();
+
+    expect(onFrame).toHaveBeenCalled();
+    const snapshot = onFrame.mock.calls[onFrame.mock.calls.length - 1][0];
+    expect(snapshot.characters[0].bubble).toEqual({ kind: "public", text: "hello house" });
+  });
+});

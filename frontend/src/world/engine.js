@@ -1,6 +1,15 @@
 import { MAP, MAP_WIDTH, MAP_HEIGHT, TILE_SIZE } from "./map";
 import { pickRandomAdjacentTile, occupiedTiles } from "./movement";
 import { tileSourceRect, characterSourceRect, FRAMES_PER_DIRECTION } from "./sprites";
+import { mapEvent } from "./eventMapping";
+import { findPathToAdjacent } from "./pathfinding";
+import {
+  INTERACTION_DURATION_MS,
+  isCommandReady,
+  startCommand,
+  advanceWalkingToInteract,
+  advanceInteracting,
+} from "./interactions";
 
 const WALK_DURATION_MS = 350;
 const MIN_PAUSE_MS = 800;
@@ -10,6 +19,16 @@ export function randomPause(rng = Math.random) {
   return MIN_PAUSE_MS + rng() * (MAX_PAUSE_MS - MIN_PAUSE_MS);
 }
 
+function characterPixelPosition(character) {
+  const toX = character.moving ? character.targetX : character.tileX;
+  const toY = character.moving ? character.targetY : character.tileY;
+  const progress = character.moving ? character.walkProgress : 0;
+  return {
+    pixelX: (character.tileX + (toX - character.tileX) * progress) * TILE_SIZE,
+    pixelY: (character.tileY + (toY - character.tileY) * progress) * TILE_SIZE,
+  };
+}
+
 export class WorldEngine {
   constructor(ctx, characters, images, options = {}) {
     this.ctx = ctx;
@@ -17,8 +36,10 @@ export class WorldEngine {
     this.rng = options.rng || Math.random;
     this.requestFrame = options.requestFrame || ((cb) => requestAnimationFrame(cb));
     this.cancelFrame = options.cancelFrame || ((id) => cancelAnimationFrame(id));
+    this.onFrame = options.onFrame || null;
     this.rafId = null;
     this.lastTimestamp = null;
+    this.gmBanner = null;
 
     this.characters = characters.map((character) => ({
       ...character,
@@ -28,6 +49,11 @@ export class WorldEngine {
       targetX: undefined,
       targetY: undefined,
       pauseRemainingMs: randomPause(this.rng),
+      mode: "wander",
+      queue: [],
+      path: [],
+      activeCommand: null,
+      interactingRemainingMs: 0,
     }));
   }
 
@@ -50,8 +76,43 @@ export class WorldEngine {
     }
   }
 
+  handleEvent(rawEvent) {
+    const command = mapEvent(rawEvent);
+    if (!command) return;
+
+    if (command.kind === "gm") {
+      this.gmBanner = { text: command.text, remainingMs: INTERACTION_DURATION_MS };
+      return;
+    }
+
+    const sender = this.characters.find((c) => c.id === command.senderId);
+    if (sender) sender.queue.push(command);
+
+    if (command.kind === "private") {
+      const recipient = this.characters.find((c) => c.id === command.recipientId);
+      if (recipient) recipient.queue.push(command);
+    }
+  }
+
   update(deltaMs) {
+    const charactersById = new Map(this.characters.map((c) => [c.id, c]));
+
     for (const character of this.characters) {
+      if (character.mode === "interacting") {
+        advanceInteracting(character, deltaMs);
+        continue;
+      }
+
+      if (character.mode === "walking-to-interact") {
+        advanceWalkingToInteract(character, deltaMs, charactersById);
+        continue;
+      }
+
+      if (character.queue.length > 0 && isCommandReady(character, charactersById)) {
+        startCommand(character, charactersById, findPathToAdjacent);
+        continue;
+      }
+
       if (character.moving) {
         character.walkProgress += deltaMs / WALK_DURATION_MS;
         if (character.walkProgress >= 1) {
@@ -81,6 +142,11 @@ export class WorldEngine {
         character.pauseRemainingMs = randomPause(this.rng);
       }
     }
+
+    if (this.gmBanner) {
+      this.gmBanner.remainingMs -= deltaMs;
+      if (this.gmBanner.remainingMs <= 0) this.gmBanner = null;
+    }
   }
 
   draw() {
@@ -98,16 +164,35 @@ export class WorldEngine {
     }
 
     for (const character of this.characters) {
-      const toX = character.moving ? character.targetX : character.tileX;
-      const toY = character.moving ? character.targetY : character.tileY;
+      const { pixelX, pixelY } = characterPixelPosition(character);
       const progress = character.moving ? character.walkProgress : 0;
-      const pixelX = (character.tileX + (toX - character.tileX) * progress) * TILE_SIZE;
-      const pixelY = (character.tileY + (toY - character.tileY) * progress) * TILE_SIZE;
-
       const frame = character.moving ? Math.floor(progress * FRAMES_PER_DIRECTION) : 0;
       const { sx, sy, sw, sh } = characterSourceRect(character.direction, frame);
       const sheet = this.images.characters[character.spriteKey];
       ctx.drawImage(sheet, sx, sy, sw, sh, pixelX, pixelY, TILE_SIZE, TILE_SIZE);
     }
+
+    if (this.onFrame) {
+      this.onFrame(this.buildFrameSnapshot());
+    }
+  }
+
+  buildFrameSnapshot() {
+    return {
+      characters: this.characters.map((character) => {
+        const { pixelX, pixelY } = characterPixelPosition(character);
+        const bubble = (
+          character.mode === "interacting"
+          && character.activeCommand
+          && character.activeCommand.senderId === character.id
+        )
+          ? { kind: character.activeCommand.kind, text: character.activeCommand.text }
+          : null;
+        return {
+          id: character.id, pixelX, pixelY, mode: character.mode, bubble,
+        };
+      }),
+      gmBanner: this.gmBanner ? { text: this.gmBanner.text } : null,
+    };
   }
 }
