@@ -4,7 +4,11 @@ import ShowSetup from "./ShowSetup";
 import * as api from "../api/client";
 
 const FIVE_NAMES = [
-  "The Strategist", "The Diplomat", "The Loyalist", "The Operator", "The Wildcard",
+  "Vikram Sethi — The Creditor",
+  "Priya Malhotra — The Wife",
+  "Arjun Mehta — The Lawyer",
+  "Karan Malhotra — The Brother",
+  "Meena Devi — The Househelp",
 ];
 
 beforeEach(() => {
@@ -26,7 +30,7 @@ describe("ShowSetup", () => {
     selectFive();
     expect(submit).not.toBeDisabled();
 
-    fireEvent.click(screen.getByLabelText("The Skeptic"));
+    fireEvent.click(screen.getByLabelText(FIVE_NAMES[0]));
     expect(submit).toBeDisabled();
   });
 
@@ -50,7 +54,7 @@ describe("ShowSetup", () => {
         title: "Sheesha Ghar",
         max_rounds: 6,
         agent_preset_ids: [
-          "strategist", "diplomat", "loyalist", "operator", "wildcard",
+          "creditor", "wife", "lawyer", "brother", "househelp",
         ],
       })
     );
