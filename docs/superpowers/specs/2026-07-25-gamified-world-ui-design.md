@@ -97,8 +97,8 @@ A plain JS class, no React/DOM framework dependency beyond the `CanvasRenderingC
 
 ## Assets
 
-- Tileset + character walk-cycle spritesheets sourced from an open-license pack in the LPC (Liberated Pixel Cup) style/family during implementation — CC-BY-SA/GPL-compatible, requiring attribution only. Attribution recorded in `frontend/src/world/assets/CREDITS.md`.
-- If the sourced pack's visual style doesn't reasonably match the reference screenshot's feel (16x16-ish top-down RPG, 4-direction walk cycles), this will be flagged before committing rather than forced through.
+- **Amended during planning:** rather than sourcing an external open-license pack (network-dependent, license-verification risk, uncertain layout match against what the rendering code expects), the tileset and character walk-cycle spritesheets are generated deterministically by a committed script (`frontend/scripts/generate_placeholder_assets.py`, Python + Pillow) — simple solid-colored shapes to an exact grid layout contract (32px tiles, 4-direction × 4-frame character sheets). Zero licensing risk, fully reproducible, and the layout contract is exactly what a future real-art swap must match. Attribution/provenance recorded in `frontend/src/world/assets/CREDITS.md`.
+- A real pixel-art pack (LPC-style or otherwise) swapping in for these placeholders, without any rendering-code changes, is explicit follow-up work — see "Open follow-up" below.
 
 ## Open follow-up (not this spec)
 
@@ -106,3 +106,4 @@ A plain JS class, no React/DOM framework dependency beyond the `CanvasRenderingC
 - Multiple rooms / room transitions (confession booth, bedrooms) matching the show's actual locations.
 - Any interactivity (click a character to inspect, see their latest event/confession).
 - A real navigation/routing setup replacing the throwaway `App.jsx` view toggle.
+- Swapping the generated placeholder tileset/character art for a real licensed or commissioned pixel-art pack, matching the existing 32px/4-direction/4-frame grid contract.
