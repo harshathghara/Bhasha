@@ -66,6 +66,10 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
     def create_show(req: CreateShowRequest):
         if len(req.agent_preset_ids) != 5:
             raise HTTPException(400, "Must pick exactly 5 agents")
+        try:
+            contestants = [build_preset_agent(pid) for pid in req.agent_preset_ids]
+        except KeyError as exc:
+            raise HTTPException(400, str(exc)) from exc
         show = Show(
             id=req.title.lower().replace(" ", "-"),
             title=req.title,
@@ -73,15 +77,18 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
             gm_prompt=req.gm_prompt,
             rules_text=req.rules_text,
             max_rounds=req.max_rounds,
-            contestants=[build_preset_agent(pid) for pid in req.agent_preset_ids],
+            contestants=contestants,
             status=ShowStatus.RUNNING,
         )
-        for connection in req.secret_connections:
-            agent_a = show.get_agent(connection["agent_a"])
-            agent_b = show.get_agent(connection["agent_b"])
-            agent_a.connected_to, agent_b.connected_to = agent_b.id, agent_a.id
-            agent_a.connection_note = connection["connection_note"]
-            agent_b.connection_note = connection["connection_note"]
+        try:
+            for connection in req.secret_connections:
+                agent_a = show.get_agent(connection["agent_a"])
+                agent_b = show.get_agent(connection["agent_b"])
+                agent_a.connected_to, agent_b.connected_to = agent_b.id, agent_a.id
+                agent_a.connection_note = connection["connection_note"]
+                agent_b.connection_note = connection["connection_note"]
+        except KeyError as exc:
+            raise HTTPException(400, str(exc)) from exc
         store.add(show)
         return show.to_dict()
 

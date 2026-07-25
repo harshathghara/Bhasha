@@ -174,3 +174,24 @@ def test_websocket_streams_events_during_a_round(tmp_path):
 
     assert first["kind"] == "gm_announcement"
     assert first["seq"] == 0
+
+
+def test_create_show_with_invalid_preset_id_returns_400(tmp_path):
+    client, _ = make_client(tmp_path)
+    response = create_show(
+        client,
+        agent_preset_ids=["creditor", "wife", "lawyer", "brother", "not-a-real-preset"]
+    )
+    assert response.status_code == 400
+
+
+def test_create_show_with_unknown_agent_in_secret_connection_returns_400(tmp_path):
+    client, _ = make_client(tmp_path)
+    response = create_show(
+        client,
+        secret_connections=[
+            {"agent_a": "unknown-agent", "agent_b": "lawyer",
+             "connection_note": "Test connection."},
+        ]
+    )
+    assert response.status_code == 400
