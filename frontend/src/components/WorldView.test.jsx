@@ -128,6 +128,9 @@ describe("WorldView", () => {
     expect(screen.getByTestId("chat-entry-seq-1")).toHaveAttribute("data-sender", "creditor");
     expect(colorForSender("creditor", ["creditor", "wife"]))
       .not.toBe(colorForSender("wife", ["creditor", "wife"]));
+    const chatList = screen.getByTestId("chat-entry-seq-1").parentElement;
+    expect(chatList).toHaveStyle({ minHeight: "0" });
+    expect(screen.getByTestId("chat-entry-seq-1")).toHaveStyle({ flexShrink: "0" });
     expect(chatKindLabel({ kind: "gm_announcement" })).toBe("gm");
   });
 

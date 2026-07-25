@@ -172,6 +172,7 @@ const chatListStyle = {
   padding: "10px 12px",
   overflowY: "auto",
   flex: 1,
+  minHeight: 0,
   display: "flex",
   flexDirection: "column",
   gap: "10px",
@@ -475,6 +476,7 @@ export default function WorldView({ showId, characters, onDialogueBusyChange }) 
                   data-visibility={event.visibility || ""}
                   style={{
                     borderLeft: `3px solid ${color}`,
+                    flexShrink: 0,
                     paddingLeft: "10px",
                   }}
                 >
