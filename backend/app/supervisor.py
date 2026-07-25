@@ -41,7 +41,7 @@ async def watch_for_end(show, bus, config, stop_event, started_at) -> None:
 
 
 async def run_round(show, bus, llm_client, config, store=None,
-                    stop_event=None, opening_brief=None) -> str:
+                    stop_event=None, opening_brief=None):
     show.current_round += 1
     active = show.active_agents()
     for agent in active:

@@ -40,6 +40,7 @@ class StartRoundRequest(BaseModel):
     opening_brief: Optional[str] = None
 
 
+
 def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
     app = FastAPI()
     app.add_middleware(

@@ -83,6 +83,7 @@ async def test_run_round_publishes_opening_brief_after_kickoff():
     assert show.events[1].round == 1
 
 
+
 @pytest.mark.asyncio
 async def test_run_round_ends_on_quiescence_when_agents_stay_silent():
     show = make_show()

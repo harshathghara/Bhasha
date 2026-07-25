@@ -31,6 +31,17 @@ class FakeLLMClient:
         return self.calls_per_wake.pop(0)
 
 
+def test_build_gm_prompt_labels_producer_notes():
+    show = make_show()
+    event = Event(
+        seq=0, round=1, sender_id="producer",
+        text="A letter arrives accusing Karan.",
+        kind=EventKind.PRODUCER_NOTE,
+    )
+    _, user_prompt = build_gm_prompt(show, [event])
+    assert "[PRODUCER CLUE] A letter arrives accusing Karan." in user_prompt
+
+
 def test_build_gm_prompt_shows_private_and_confession_content():
     show = make_show()
     batch = [
