@@ -19,15 +19,17 @@ describe("findPathBetween", () => {
     ]);
   });
 
-  it("routes around the couch obstacle at (4,3)-(5,3)", () => {
-    const path = findPathBetween({ x: 4, y: 2 }, { x: 4, y: 4 });
+  it("routes around the 2x2 couch block at (9,7)-(10,8)", () => {
+    const path = findPathBetween({ x: 9, y: 6 }, { x: 9, y: 9 });
     expect(path).not.toBeNull();
     for (const step of path) {
-      expect(step).not.toEqual({ x: 4, y: 3 });
-      expect(step).not.toEqual({ x: 5, y: 3 });
+      expect(step).not.toEqual({ x: 9, y: 7 });
+      expect(step).not.toEqual({ x: 10, y: 7 });
+      expect(step).not.toEqual({ x: 9, y: 8 });
+      expect(step).not.toEqual({ x: 10, y: 8 });
     }
-    expect(path[0]).toEqual({ x: 4, y: 2 });
-    expect(path[path.length - 1]).toEqual({ x: 4, y: 4 });
+    expect(path[0]).toEqual({ x: 9, y: 6 });
+    expect(path[path.length - 1]).toEqual({ x: 9, y: 9 });
   });
 
   it("every consecutive pair of tiles in the path is orthogonally adjacent", () => {

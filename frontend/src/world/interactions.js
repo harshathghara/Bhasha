@@ -1,5 +1,7 @@
 export const INTERACTION_DURATION_MS = 3500;
-const INTERACT_WALK_DURATION_MS = 350;
+// Matches engine.js's WALK_DURATION_MS: halved because map.js's grid
+// resolution doubled, so each tile-step now covers half the real distance.
+const INTERACT_WALK_DURATION_MS = 175;
 
 export function directionToward(fromX, fromY, toX, toY) {
   if (toX > fromX) return "right";

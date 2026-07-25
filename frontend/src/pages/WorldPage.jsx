@@ -4,11 +4,11 @@ import RoundEndModal from "../components/RoundEndModal";
 import { getShow, startRound } from "../api/client";
 
 const SPAWN_POSITIONS = [
-  { tileX: 2, tileY: 2 },
-  { tileX: 4, tileY: 2 },
-  { tileX: 6, tileY: 2 },
-  { tileX: 3, tileY: 5 },
-  { tileX: 6, tileY: 5 },
+  { tileX: 3, tileY: 3 },
+  { tileX: 16, tileY: 3 },
+  { tileX: 10, tileY: 3 },
+  { tileX: 3, tileY: 12 },
+  { tileX: 16, tileY: 12 },
 ];
 
 export function buildCharacters(show) {

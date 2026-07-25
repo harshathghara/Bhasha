@@ -11,7 +11,7 @@ describe("isWalkable", () => {
   });
 
   it("is false for a prop tile", () => {
-    expect(isWalkable(4, 3)).toBe(false);
+    expect(isWalkable(9, 7)).toBe(false);
   });
 
   it("is false outside the grid", () => {

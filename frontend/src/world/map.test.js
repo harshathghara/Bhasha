@@ -4,10 +4,10 @@ import {
 } from "./map";
 
 describe("map dimensions", () => {
-  it("is 10 tiles wide and 8 tiles tall at 32px tiles", () => {
-    expect(TILE_SIZE).toBe(32);
-    expect(MAP_WIDTH).toBe(10);
-    expect(MAP_HEIGHT).toBe(8);
+  it("is 20 tiles wide and 16 tiles tall at 16px tiles", () => {
+    expect(TILE_SIZE).toBe(16);
+    expect(MAP_WIDTH).toBe(20);
+    expect(MAP_HEIGHT).toBe(16);
     expect(MAP).toHaveLength(MAP_HEIGHT);
     expect(MAP[0]).toHaveLength(MAP_WIDTH);
   });
@@ -23,9 +23,11 @@ describe("getTile", () => {
     expect(getTile(1, 1)).toBe(TileType.FLOOR);
   });
 
-  it("returns PROP for the couch tiles", () => {
-    expect(getTile(4, 3)).toBe(TileType.PROP);
-    expect(getTile(5, 3)).toBe(TileType.PROP);
+  it("returns PROP for the 2x2 couch block", () => {
+    expect(getTile(9, 7)).toBe(TileType.PROP);
+    expect(getTile(10, 7)).toBe(TileType.PROP);
+    expect(getTile(9, 8)).toBe(TileType.PROP);
+    expect(getTile(10, 8)).toBe(TileType.PROP);
   });
 
   it("returns undefined outside the grid", () => {

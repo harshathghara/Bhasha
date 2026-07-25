@@ -11,7 +11,10 @@ import {
   advanceInteracting,
 } from "./interactions";
 
-const WALK_DURATION_MS = 350;
+// Tiles are now half the physical size they used to be (map.js doubled grid
+// resolution), so each tile-step covers half the real distance — halved to
+// keep the same perceived walking speed across the room.
+const WALK_DURATION_MS = 175;
 const MIN_PAUSE_MS = 800;
 const MAX_PAUSE_MS = 2000;
 
