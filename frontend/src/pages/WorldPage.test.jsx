@@ -59,7 +59,8 @@ describe("WorldPage", () => {
   it("shows the round-end modal with recap when a round finishes", async () => {
     vi.spyOn(api, "startRound").mockResolvedValue({
       round: 1,
-      narrative: "The house settled into an uneasy quiet.",
+      recap: "Heat shifted onto Karan; blame not sealed.",
+      narrative: "Priya watched as Karan took the room's fury.",
     });
     render(<WorldPage show={show} />);
 
@@ -68,14 +69,15 @@ describe("WorldPage", () => {
     expect(await screen.findByTestId("round-end-modal")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /round 1 ended/i })).toBeInTheDocument();
     expect(screen.getByTestId("round-end-recap")).toHaveTextContent(
-      "The house settled into an uneasy quiet.",
+      "Heat shifted onto Karan; blame not sealed.",
     );
   });
 
   it("waits for in-world dialogue to finish before showing the modal", async () => {
     vi.spyOn(api, "startRound").mockResolvedValue({
       round: 1,
-      narrative: "Recap waits for bubbles.",
+      recap: "Recap waits for bubbles.",
+      narrative: "Story waits for bubbles.",
     });
     render(<WorldPage show={show} />);
     await waitFor(() => expect(latestDialogueBusyChange).toEqual(expect.any(Function)));
@@ -99,8 +101,8 @@ describe("WorldPage", () => {
 
   it("starts the next round from the modal", async () => {
     const spy = vi.spyOn(api, "startRound")
-      .mockResolvedValueOnce({ round: 1, narrative: "Recap one." })
-      .mockResolvedValueOnce({ round: 2, narrative: "Recap two." });
+      .mockResolvedValueOnce({ round: 1, recap: "Recap one.", narrative: "Story one." })
+      .mockResolvedValueOnce({ round: 2, recap: "Recap two.", narrative: "Story two." });
     render(<WorldPage show={show} />);
 
     fireEvent.click(screen.getByRole("button", { name: /start round/i }));
@@ -116,13 +118,14 @@ describe("WorldPage", () => {
   it("toggles story so far with all round narratives", async () => {
     vi.spyOn(api, "startRound").mockResolvedValue({
       round: 1,
-      narrative: "Recap one.",
+      recap: "Status one.",
+      narrative: "Story chapter one with Priya.",
     });
     vi.spyOn(api, "getShow").mockResolvedValue({
       ...show,
       narratives: {
-        1: "Recap one.",
-        2: "Recap two from server.",
+        1: "Story chapter one with Priya.",
+        2: "Story chapter two from server.",
       },
     });
     render(<WorldPage show={show} />);
@@ -133,13 +136,15 @@ describe("WorldPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /story so far/i }));
 
     const story = await screen.findByTestId("story-so-far");
-    expect(story).toHaveTextContent("Recap one.");
-    expect(story).toHaveTextContent("Recap two from server.");
+    expect(story).toHaveTextContent("Story chapter one with Priya.");
+    expect(story).toHaveTextContent("Story chapter two from server.");
+    expect(screen.getByTestId("round-end-recap")).toHaveTextContent("Status one.");
   });
 
   it("disables next round when the show hits its round limit", async () => {
     vi.spyOn(api, "startRound").mockResolvedValue({
       round: 3,
+      recap: "Final status.",
       narrative: "Final chapter.",
     });
     render(<WorldPage show={{ ...show, max_rounds: 3 }} />);

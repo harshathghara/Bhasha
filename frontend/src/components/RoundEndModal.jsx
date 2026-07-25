@@ -159,7 +159,10 @@ export default function RoundEndModal({
         </h2>
 
         {recap ? (
-          <p style={recapStyle} data-testid="round-end-recap">{recap}</p>
+          <>
+            <p style={{ ...storyRoundStyle, marginTop: 0 }}>Round recap</p>
+            <p style={recapStyle} data-testid="round-end-recap">{recap}</p>
+          </>
         ) : null}
 
         {storyOpen && (
@@ -171,7 +174,7 @@ export default function RoundEndModal({
             ) : (
               rounds.map((r) => (
                 <div key={r}>
-                  <p style={storyRoundStyle}>Round {r}</p>
+                  <p style={storyRoundStyle}>Round {r} — story</p>
                   <p style={storyTextStyle}>{narratives[r]}</p>
                 </div>
               ))

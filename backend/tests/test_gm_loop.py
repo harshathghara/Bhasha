@@ -39,7 +39,7 @@ def test_build_gm_prompt_labels_producer_notes():
         kind=EventKind.PRODUCER_NOTE,
     )
     _, user_prompt = build_gm_prompt(show, [event])
-    assert "[Producer note] A letter arrives accusing Karan." in user_prompt
+    assert "[PRODUCER CLUE] A letter arrives accusing Karan." in user_prompt
 
 
 def test_build_gm_prompt_shows_private_and_confession_content():

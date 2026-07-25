@@ -3,7 +3,7 @@ import asyncio
 from .agent_loop import run_agent_loop
 from .gm_loop import run_gm_loop
 from .models import EventKind, GM_ID, PRODUCER_ID
-from .narrator import run_narrator
+from .narrator import run_round_narration
 
 WATCH_POLL_SECONDS = 0.25
 
@@ -41,7 +41,7 @@ async def watch_for_end(show, bus, config, stop_event, started_at) -> None:
 
 
 async def run_round(show, bus, llm_client, config, store=None,
-                    stop_event=None, producer_note=None) -> str:
+                    stop_event=None, opening_brief=None):
     show.current_round += 1
     active = show.active_agents()
     for agent in active:
@@ -59,18 +59,15 @@ async def run_round(show, bus, llm_client, config, store=None,
     )
     await asyncio.sleep(0)
 
-    if producer_note and producer_note.strip():
-        bus.publish(
-            PRODUCER_ID,
-            producer_note.strip(),
-            kind=EventKind.PRODUCER_NOTE,
-        )
-
     bus.publish(
         GM_ID,
         f"Round {show.current_round} begins. The house is open.",
         kind=EventKind.GM_ANNOUNCEMENT,
     )
+
+    brief = (opening_brief or "").strip()
+    if brief:
+        bus.publish(PRODUCER_ID, brief, kind=EventKind.PRODUCER_NOTE)
 
     watcher = asyncio.create_task(
         watch_for_end(show, bus, config, stop_event, loop.time())
@@ -82,12 +79,13 @@ async def run_round(show, bus, llm_client, config, store=None,
         task.cancel()
     await asyncio.gather(*agent_tasks, gm_task, watcher, return_exceptions=True)
 
-    narrative = run_narrator(
+    recap, narrative = run_round_narration(
         show, show.events_for_round(show.current_round), llm_client
     )
+    show.recaps[show.current_round] = recap
     show.narratives[show.current_round] = narrative
 
     if store is not None:
         store.snapshot(show.id)
 
-    return narrative
+    return recap, narrative

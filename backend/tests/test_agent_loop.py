@@ -44,7 +44,7 @@ def test_build_agent_prompt_labels_producer_notes():
     )
     agent = show.get_agent("vikram")
     _, user_prompt = build_agent_prompt(show, agent, bus, fast_config())
-    assert "[Producer note] Push the cash angle harder." in user_prompt
+    assert "[HOUSE ANNOUNCEMENT / NEW CLUE] Push the cash angle harder." in user_prompt
 
 
 def test_build_agent_prompt_uses_the_visible_log_not_an_inbox_batch():
