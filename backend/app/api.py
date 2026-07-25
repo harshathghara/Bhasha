@@ -3,7 +3,6 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .event_bus import EventBus, perform_leak
@@ -33,13 +32,11 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.exception_handler(KeyError)
-    async def keyerror_exception_handler(request, exc):
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
-
-    @app.exception_handler(ValueError)
-    async def valueerror_exception_handler(request, exc):
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    def _get_show_or_404(show_id: str):
+        try:
+            return store.get(show_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     config = config or RoundConfig()
     buses = {}
@@ -90,11 +87,11 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.get("/shows/{show_id}")
     def get_show(show_id: str):
-        return store.get(show_id).to_dict()
+        return _get_show_or_404(show_id).to_dict()
 
     @app.post("/shows/{show_id}/rounds")
     async def start_round(show_id: str):
-        show = store.get(show_id)
+        show = _get_show_or_404(show_id)
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
             raise HTTPException(409, "Show has reached its round limit")
@@ -122,7 +119,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.post("/shows/{show_id}/end")
     def end_show(show_id: str):
-        show = store.get(show_id)
+        show = _get_show_or_404(show_id)
         show.status = ShowStatus.ENDED
         stop_event = stop_events.get(show_id)
         if stop_event is not None:
@@ -131,13 +128,17 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.post("/shows/{show_id}/agents/{agent_id}/kill")
     def kill_agent(show_id: str, agent_id: str):
-        agent = store.get(show_id).get_agent(agent_id)
+        show = _get_show_or_404(show_id)
+        try:
+            agent = show.get_agent(agent_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
         agent.status = AgentStatus.ELIMINATED
         return agent.to_dict()
 
     @app.post("/shows/{show_id}/events/{seq}/release")
     def release_event(show_id: str, seq: int):
-        show = store.get(show_id)
+        show = _get_show_or_404(show_id)
         for event in show.events:
             if event.seq == seq:
                 event.released = True
@@ -146,11 +147,14 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.post("/shows/{show_id}/events/{seq}/leak")
     def leak_event(show_id: str, seq: int):
-        show = store.get(show_id)
+        show = _get_show_or_404(show_id)
         bus = bus_for(show)
         for event in show.events:
             if event.seq == seq:
-                updated, _ = perform_leak(bus, event, GM_ID)
+                try:
+                    updated, _ = perform_leak(bus, event, GM_ID)
+                except ValueError as exc:
+                    raise HTTPException(409, str(exc)) from exc
                 return updated.to_dict()
         raise HTTPException(404, "No event with that seq")
 
