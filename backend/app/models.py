@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 GM_ID = "game_master"
+PRODUCER_ID = "producer"
 
 
 class AgentStatus(str, Enum):
@@ -23,6 +24,7 @@ class EventKind(str, Enum):
     GM_RULING = "gm_ruling"
     GM_ANNOUNCEMENT = "gm_announcement"
     NARRATION = "narration"
+    PRODUCER_NOTE = "producer_note"
 
 
 class Visibility(str, Enum):

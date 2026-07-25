@@ -46,6 +46,18 @@ describe("api client", () => {
     );
   });
 
+  it("startRound sends producer_note when provided", async () => {
+    global.fetch.mockReturnValue(ok({ round: 1, narrative: "x" }));
+    await startRound("sheesha-ghar", { producer_note: "Focus on the letter." });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/shows/sheesha-ghar/rounds"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ producer_note: "Focus on the letter." }),
+      }),
+    );
+  });
+
   it("killAgent hits the kill route", async () => {
     global.fetch.mockReturnValue(ok({ status: "eliminated" }));
     await killAgent("sheesha-ghar", "vikram");

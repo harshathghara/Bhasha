@@ -40,6 +40,8 @@ def build_agent_prompt(show, agent, bus, config) -> tuple:
 
 
 def _format_event(event, agent) -> str:
+    if event.kind == EventKind.PRODUCER_NOTE:
+        return f"[Producer note] {event.text}"
     if event.kind == EventKind.GM_RULING:
         return f"[GAME MASTER RULING] {event.text}"
     if event.kind == EventKind.GM_ANNOUNCEMENT:

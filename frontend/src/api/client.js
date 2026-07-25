@@ -33,7 +33,11 @@ export function getShow(showId) {
   return request(`/shows/${showId}`);
 }
 
-export function startRound(showId) {
+export function startRound(showId, { producer_note } = {}) {
+  const trimmed = typeof producer_note === "string" ? producer_note.trim() : "";
+  if (trimmed) {
+    return post(`/shows/${showId}/rounds`, { producer_note: trimmed });
+  }
   return post(`/shows/${showId}/rounds`);
 }
 

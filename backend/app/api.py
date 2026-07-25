@@ -23,6 +23,10 @@ class CreateShowRequest(BaseModel):
     agent_preset_ids: list
 
 
+class StartRoundRequest(BaseModel):
+    producer_note: Optional[str] = None
+
+
 def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
     app = FastAPI()
     app.add_middleware(
@@ -83,7 +87,8 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         return store.get(show_id).to_dict()
 
     @app.post("/shows/{show_id}/rounds")
-    async def start_round(show_id: str):
+    async def start_round(show_id: str, req: StartRoundRequest = None):
+        req = req or StartRoundRequest()
         show = store.get(show_id)
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
@@ -93,7 +98,8 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         stop_events[show_id] = stop_event
         try:
             narrative = await run_round(
-                show, bus_for(show), llm_client, config, store, stop_event
+                show, bus_for(show), llm_client, config, store, stop_event,
+                producer_note=req.producer_note,
             )
         finally:
             stop_events.pop(show_id, None)

@@ -70,6 +70,47 @@ def test_run_round_returns_narrative(tmp_path):
     assert response.json() == {"round": 1, "narrative": "A lively round."}
 
 
+def test_start_round_with_producer_note_publishes_event(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+
+    response = client.post(
+        f"/shows/{show_id}/rounds",
+        json={"producer_note": "Push the cash angle."},
+    )
+
+    assert response.status_code == 200
+    events = store.get(show_id).events
+    note_events = [e for e in events if e.kind.value == "producer_note"]
+    assert len(note_events) == 1
+    assert note_events[0].text == "Push the cash angle."
+    assert note_events[0].sender_id == "producer"
+
+
+def test_start_round_without_body_publishes_no_producer_note(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client).json()["id"]
+
+    assert client.post(f"/shows/{show_id}/rounds").status_code == 200
+    assert all(e.kind.value != "producer_note" for e in store.get(show_id).events)
+
+
+def test_round_limit_rejects_before_publishing_producer_note(tmp_path):
+    client, store = make_client(tmp_path)
+    show_id = create_show(client, max_rounds=1).json()["id"]
+    assert client.post(f"/shows/{show_id}/rounds").status_code == 200
+
+    response = client.post(
+        f"/shows/{show_id}/rounds",
+        json={"producer_note": "Should not appear."},
+    )
+    assert response.status_code == 409
+    assert all(
+        e.text != "Should not appear."
+        for e in store.get(show_id).events
+    )
+
+
 def test_round_limit_is_enforced(tmp_path):
     client, _ = make_client(tmp_path)
     show_id = create_show(client, max_rounds=1).json()["id"]

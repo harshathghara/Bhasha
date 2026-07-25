@@ -2,7 +2,7 @@ import asyncio
 
 from .agent_loop import run_agent_loop
 from .gm_loop import run_gm_loop
-from .models import EventKind, GM_ID
+from .models import EventKind, GM_ID, PRODUCER_ID
 from .narrator import run_narrator
 
 WATCH_POLL_SECONDS = 0.25
@@ -41,7 +41,7 @@ async def watch_for_end(show, bus, config, stop_event, started_at) -> None:
 
 
 async def run_round(show, bus, llm_client, config, store=None,
-                    stop_event=None) -> str:
+                    stop_event=None, producer_note=None) -> str:
     show.current_round += 1
     active = show.active_agents()
     for agent in active:
@@ -58,6 +58,13 @@ async def run_round(show, bus, llm_client, config, store=None,
         run_gm_loop(show, bus, llm_client, config, stop_event)
     )
     await asyncio.sleep(0)
+
+    if producer_note and producer_note.strip():
+        bus.publish(
+            PRODUCER_ID,
+            producer_note.strip(),
+            kind=EventKind.PRODUCER_NOTE,
+        )
 
     bus.publish(
         GM_ID,

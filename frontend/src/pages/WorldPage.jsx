@@ -39,7 +39,7 @@ export default function WorldPage({ show }) {
   // Wait for in-world bubbles / pending dialogue to finish before showing the modal.
   const modalOpen = endedRound != null && !roundActive && !dialogueBusy;
 
-  async function runRound() {
+  async function runRound(producerNote = "") {
     const previousEnded = endedRound;
     setStarting(true);
     setStartError(null);
@@ -47,7 +47,11 @@ export default function WorldPage({ show }) {
     setRoundActive(true);
     setEndedRound(null);
     try {
-      const result = await startRound(show.id);
+      const trimmed = typeof producerNote === "string" ? producerNote.trim() : "";
+      const result = await startRound(
+        show.id,
+        trimmed ? { producer_note: trimmed } : {},
+      );
       setNarratives((prev) => ({
         ...prev,
         [result.round]: result.narrative,
@@ -98,7 +102,7 @@ export default function WorldPage({ show }) {
     <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
       {!roundActive && !modalOpen && (
         <button
-          onClick={runRound}
+          onClick={() => runRound()}
           disabled={starting || showOver}
           style={{ position: "absolute", top: 12, left: 12, zIndex: 2 }}
         >

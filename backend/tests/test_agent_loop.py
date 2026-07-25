@@ -34,6 +34,19 @@ class FakeLLMClient:
         return self.calls_per_wake.pop(0)
 
 
+def test_build_agent_prompt_labels_producer_notes():
+    show = make_show()
+    bus = EventBus(show)
+    bus.publish(
+        "producer",
+        "Push the cash angle harder.",
+        kind=EventKind.PRODUCER_NOTE,
+    )
+    agent = show.get_agent("vikram")
+    _, user_prompt = build_agent_prompt(show, agent, bus, fast_config())
+    assert "[Producer note] Push the cash angle harder." in user_prompt
+
+
 def test_build_agent_prompt_uses_the_visible_log_not_an_inbox_batch():
     show = make_show()
     bus = EventBus(show)

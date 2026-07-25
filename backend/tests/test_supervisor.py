@@ -61,6 +61,40 @@ async def test_run_round_publishes_kickoff_and_runs_agents():
 
 
 @pytest.mark.asyncio
+async def test_run_round_publishes_producer_note_before_kickoff():
+    show = make_show()
+    bus = EventBus(show)
+
+    await asyncio.wait_for(
+        run_round(
+            show, bus, SilentClient(), fast_config(),
+            producer_note="  Focus on the letter.  ",
+        ),
+        timeout=10,
+    )
+
+    assert show.events[0].kind == EventKind.PRODUCER_NOTE
+    assert show.events[0].sender_id == "producer"
+    assert show.events[0].text == "Focus on the letter."
+    assert show.events[0].visibility.value == "public"
+    assert show.events[1].kind == EventKind.GM_ANNOUNCEMENT
+
+
+@pytest.mark.asyncio
+async def test_run_round_skips_empty_producer_note():
+    show = make_show()
+    bus = EventBus(show)
+
+    await asyncio.wait_for(
+        run_round(show, bus, SilentClient(), fast_config(), producer_note="   "),
+        timeout=10,
+    )
+
+    assert show.events[0].kind == EventKind.GM_ANNOUNCEMENT
+    assert all(e.kind != EventKind.PRODUCER_NOTE for e in show.events)
+
+
+@pytest.mark.asyncio
 async def test_run_round_ends_on_quiescence_when_agents_stay_silent():
     show = make_show()
     bus = EventBus(show)
