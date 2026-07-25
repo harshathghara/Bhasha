@@ -87,6 +87,63 @@ describe("buildMeetPlan", () => {
   });
 });
 
+describe("buildMeetPlan crowd avoidance", () => {
+  function manhattan(a, b) {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  }
+
+  it("defaults to the natural midpoint when no one else is interacting", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 8, tileY: 1 });
+    const byId = new Map([["a", sender], ["b", recipient]]);
+
+    const plan = buildMeetPlan(command, byId, findPathBetween);
+
+    const senderEnd = plan.senderPath[plan.senderPath.length - 1];
+    const recipientEnd = plan.recipientPath[plan.recipientPath.length - 1];
+    expect(senderEnd).toEqual({ x: 5, y: 1 });
+    expect(recipientEnd).toEqual({ x: 6, y: 1 });
+  });
+
+  it("steers the meeting point away from another pair already interacting near the midpoint", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 8, tileY: 1 });
+    const busyOne = baseCharacter({ id: "c", tileX: 5, tileY: 2, mode: "interacting" });
+    const busyTwo = baseCharacter({ id: "d", tileX: 6, tileY: 2, mode: "interacting" });
+    const byId = new Map([
+      ["a", sender], ["b", recipient], ["c", busyOne], ["d", busyTwo],
+    ]);
+
+    const plan = buildMeetPlan(command, byId, findPathBetween);
+
+    const senderEnd = plan.senderPath.length > 0
+      ? plan.senderPath[plan.senderPath.length - 1] : { x: sender.tileX, y: sender.tileY };
+    const recipientEnd = plan.recipientPath.length > 0
+      ? plan.recipientPath[plan.recipientPath.length - 1] : { x: recipient.tileX, y: recipient.tileY };
+    const distFromCrowd = Math.min(
+      manhattan(senderEnd, { x: 5, y: 2 }), manhattan(senderEnd, { x: 6, y: 2 }),
+      manhattan(recipientEnd, { x: 5, y: 2 }), manhattan(recipientEnd, { x: 6, y: 2 }),
+    );
+    // The untouched natural midpoint (5,1)/(6,1) would only be 1 tile from the crowd.
+    expect(distFromCrowd).toBeGreaterThan(1);
+  });
+
+  it("ignores characters who are only wandering, not actively interacting", () => {
+    const command = { id: 1, kind: "private", senderId: "a", recipientId: "b" };
+    const sender = baseCharacter({ id: "a", tileX: 1, tileY: 1 });
+    const recipient = baseCharacter({ id: "b", tileX: 8, tileY: 1 });
+    const wanderer = baseCharacter({ id: "c", tileX: 5, tileY: 2, mode: "wander" });
+    const byId = new Map([["a", sender], ["b", recipient], ["c", wanderer]]);
+
+    const plan = buildMeetPlan(command, byId, findPathBetween);
+
+    const senderEnd = plan.senderPath[plan.senderPath.length - 1];
+    expect(senderEnd).toEqual({ x: 5, y: 1 });
+  });
+});
+
 describe("startCommand", () => {
   it("begins interacting immediately for a public command, facing unchanged", () => {
     const command = { id: 1, kind: "public", senderId: "a", text: "hi" };
