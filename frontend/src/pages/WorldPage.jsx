@@ -33,8 +33,14 @@ export default function WorldPage({ show }) {
   }
 
   return (
-    <div>
-      <button onClick={handleStart} disabled={starting}>Start round</button>
+    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
+      <button
+        onClick={handleStart}
+        disabled={starting}
+        style={{ position: "absolute", top: 12, left: 12, zIndex: 2 }}
+      >
+        Start round
+      </button>
       <WorldView showId={show.id} characters={characters} />
     </div>
   );

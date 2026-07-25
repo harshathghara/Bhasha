@@ -85,13 +85,17 @@ export class WorldEngine {
       return;
     }
 
+    if (command.kind === "private") {
+      const sender = this.characters.find((c) => c.id === command.senderId);
+      const recipient = this.characters.find((c) => c.id === command.recipientId);
+      if (!sender || !recipient) return;
+      sender.queue.push(command);
+      recipient.queue.push(command);
+      return;
+    }
+
     const sender = this.characters.find((c) => c.id === command.senderId);
     if (sender) sender.queue.push(command);
-
-    if (command.kind === "private") {
-      const recipient = this.characters.find((c) => c.id === command.recipientId);
-      if (recipient) recipient.queue.push(command);
-    }
   }
 
   update(deltaMs) {

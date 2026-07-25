@@ -133,6 +133,20 @@ describe("WorldEngine.handleEvent", () => {
     expect(engine.characters[0].queue[0].id).toBe(engine.characters[1].queue[0].id);
   });
 
+  it("skips a private event when the recipient is unknown, leaving both queues empty", () => {
+    const sender = baseCharacter({ id: "a" });
+    const other = baseCharacter({ id: "b", tileX: 5, tileY: 5 });
+    const engine = new WorldEngine(fakeContext(), [sender, other], fakeImages());
+
+    engine.handleEvent({
+      seq: 1, sender_id: "a", text: "psst", kind: "agent_action",
+      visibility: "private", recipients: ["missing"],
+    });
+
+    expect(engine.characters[0].queue).toHaveLength(0);
+    expect(engine.characters[1].queue).toHaveLength(0);
+  });
+
   it("sets a GM banner without touching any character", () => {
     const engine = new WorldEngine(fakeContext(), [baseCharacter()], fakeImages());
 
