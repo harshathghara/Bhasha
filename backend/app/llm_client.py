@@ -4,10 +4,18 @@ import os
 from openai import OpenAI
 
 
-class OpenAILLMClient:
-    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None):
+class LLMClient:
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        api_key: str = None,
+        base_url: str = None,
+    ):
         self.model = model
-        self.client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
+        kwargs = {"api_key": api_key or os.environ["OPENAI_API_KEY"]}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = OpenAI(**kwargs)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         response = self.client.chat.completions.create(
@@ -38,3 +46,6 @@ class OpenAILLMClient:
                 continue
             calls.append({"name": tool_call.function.name, "arguments": arguments})
         return calls
+
+
+OpenAILLMClient = LLMClient
