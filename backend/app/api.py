@@ -170,7 +170,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         return agent.to_dict()
 
     @app.post("/shows/{show_id}/events")
-    def inject_event(show_id: str, req: InjectEventRequest):
+    async def inject_event(show_id: str, req: InjectEventRequest):
         """Publish a public producer clue into the live event log."""
         text = (req.text or "").strip()
         if not text:
@@ -193,7 +193,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         raise HTTPException(404, "No event with that seq")
 
     @app.post("/shows/{show_id}/events/{seq}/leak")
-    def leak_event(show_id: str, seq: int):
+    async def leak_event(show_id: str, seq: int):
         show = require_show(show_id)
         bus = bus_for(show)
         for event in show.events:
