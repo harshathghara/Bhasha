@@ -26,7 +26,14 @@ def build_agent_prompt(show, agent, bus, config) -> tuple:
         f"{connection_line}\n\n"
         "Use the tools to act. You may use several in one turn: speak to the "
         "house, send private messages, and record a confession. If nothing "
-        "here deserves a response, use stay_silent."
+        "here deserves a response, use stay_silent.\n\n"
+        "Pay close attention to anything marked [PUBLIC LEAK]. A leak reveals "
+        "who really said what to whom behind closed doors — it is direct "
+        "evidence of a lie, a betrayal, or a hidden alliance. Let it change "
+        "who you trust, who you ally with, and who you publicly accuse. If "
+        "you yourself are exposed by a leak, you have to reckon with it, not "
+        "ignore it. If you witness a private message or confession you think "
+        "should come out, you may use leak_message to reveal it yourself."
     )
 
     visible = bus.visible_events_for(agent.id, config.context_window_events)
@@ -48,7 +55,7 @@ def _format_event(event, agent) -> str:
     if event.kind == EventKind.PRODUCER_NOTE:
         return f"[HOUSE ANNOUNCEMENT / NEW CLUE] {event.text}"
     if event.kind == EventKind.LEAK:
-        return f"[LEAKED] {event.text}"
+        return f"[PUBLIC LEAK — everyone now knows this] {event.text}"
     if event.kind == EventKind.CONFESSION and event.sender_id == agent.id and not event.released:
         return f"[seq {event.seq}, your own private thought] {event.text}"
     if event.sender_id == agent.id:

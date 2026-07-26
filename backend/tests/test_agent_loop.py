@@ -47,6 +47,28 @@ def test_build_agent_prompt_labels_producer_notes():
     assert "[HOUSE ANNOUNCEMENT / NEW CLUE] Push the cash angle harder." in user_prompt
 
 
+def test_system_prompt_instructs_agents_to_weigh_leaks_for_trust():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    system_prompt, _ = build_agent_prompt(show, agent, bus, fast_config())
+    assert "leak" in system_prompt.lower()
+    assert "trust" in system_prompt.lower()
+
+
+def test_format_event_flags_a_leak_as_consequential_public_knowledge():
+    show = make_show()
+    bus = EventBus(show)
+    agent = show.get_agent("vikram")
+    bus.publish("meera", 'It has been leaked that Meera said "Ally?" to Vikram.',
+                kind=EventKind.LEAK)
+
+    _, user_prompt = build_agent_prompt(show, agent, bus, fast_config())
+
+    assert "[PUBLIC LEAK" in user_prompt
+    assert 'It has been leaked that Meera said "Ally?" to Vikram.' in user_prompt
+
+
 def test_build_agent_prompt_uses_the_visible_log_not_an_inbox_batch():
     show = make_show()
     bus = EventBus(show)
