@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const PIXEL_FONT = '"Press Start 2P", "VT323", monospace';
 
 // Matches the centered game frame so the modal covers the world, not the chat.
@@ -78,6 +80,30 @@ const storyTextStyle = {
   wordBreak: "break-word",
 };
 
+const noteLabelStyle = {
+  margin: 0,
+  fontSize: "11px",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "#8a8a96",
+};
+
+const noteInputStyle = {
+  width: "100%",
+  minHeight: "72px",
+  resize: "vertical",
+  boxSizing: "border-box",
+  margin: 0,
+  padding: "10px 12px",
+  border: "1px solid #3a3a44",
+  borderRadius: "4px",
+  background: "#0f0f14",
+  color: "#e8e8ec",
+  fontFamily: '"IBM Plex Sans", "Segoe UI", system-ui, sans-serif',
+  fontSize: "13px",
+  lineHeight: 1.45,
+};
+
 const actionsStyle = {
   display: "flex",
   flexWrap: "wrap",
@@ -124,6 +150,7 @@ export default function RoundEndModal({
   onToggleStory,
   onEndGame,
 }) {
+  const [producerNote, setProducerNote] = useState("");
   const rounds = Object.keys(narratives || {})
     .map(Number)
     .sort((a, b) => a - b);
@@ -136,7 +163,10 @@ export default function RoundEndModal({
         </h2>
 
         {recap ? (
-          <p style={recapStyle} data-testid="round-end-recap">{recap}</p>
+          <>
+            <p style={{ ...storyRoundStyle, marginTop: 0 }}>Round recap</p>
+            <p style={recapStyle} data-testid="round-end-recap">{recap}</p>
+          </>
         ) : null}
 
         {storyOpen && (
@@ -148,7 +178,7 @@ export default function RoundEndModal({
             ) : (
               rounds.map((r) => (
                 <div key={r}>
-                  <p style={storyRoundStyle}>Round {r}</p>
+                  <p style={storyRoundStyle}>Round {r} — story</p>
                   <p style={storyTextStyle}>{narratives[r]}</p>
                 </div>
               ))
@@ -156,10 +186,24 @@ export default function RoundEndModal({
           </div>
         )}
 
+        {!showOver && (
+          <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={noteLabelStyle}>Producer note</span>
+            <textarea
+              data-testid="producer-note-input"
+              value={producerNote}
+              onChange={(event) => setProducerNote(event.target.value)}
+              placeholder="Optional note for all agents and the GM…"
+              disabled={starting}
+              style={noteInputStyle}
+            />
+          </label>
+        )}
+
         <div style={actionsStyle}>
           <button
             type="button"
-            onClick={onStartNext}
+            onClick={() => onStartNext(producerNote.trim())}
             disabled={starting || showOver}
             style={starting || showOver ? disabledButtonStyle : buttonStyle}
           >

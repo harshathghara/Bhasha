@@ -22,7 +22,9 @@ def build_gm_prompt(show, batch) -> tuple:
 
     lines = []
     for event in batch:
-        if event.kind == EventKind.CONFESSION:
+        if event.kind == EventKind.PRODUCER_NOTE:
+            lines.append(f"[PRODUCER CLUE] {event.text}")
+        elif event.kind == EventKind.CONFESSION:
             lines.append(f"[CONFESSION by {event.sender_id}] {event.text}")
         elif event.visibility == Visibility.PRIVATE:
             lines.append(

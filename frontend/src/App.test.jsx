@@ -19,15 +19,7 @@ describe("App", () => {
 
     expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start show/i })).toBeInTheDocument();
-
-    const names = [
-      "Vikram Sethi — The Creditor",
-      "Priya Malhotra — The Wife",
-      "Arjun Mehta — The Lawyer",
-      "Karan Malhotra — The Brother",
-      "Meena Devi — The Househelp",
-    ];
-    names.forEach((name) => fireEvent.click(screen.getByLabelText(name)));
+    // Murder cast is pre-selected; do not toggle the checkboxes (that would deselect them).
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
     await waitFor(() => expect(screen.getByTestId("world-page-stub")).toBeInTheDocument());
@@ -39,14 +31,7 @@ describe("App", () => {
     vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar", contestants: [] });
     render(<App />);
 
-    const names = [
-      "Vikram Sethi — The Creditor",
-      "Priya Malhotra — The Wife",
-      "Arjun Mehta — The Lawyer",
-      "Karan Malhotra — The Brother",
-      "Meena Devi — The Househelp",
-    ];
-    names.forEach((name) => fireEvent.click(screen.getByLabelText(name)));
+    // Murder cast is pre-selected; do not toggle the checkboxes (that would deselect them).
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
     await screen.findByTestId("world-page-stub");
@@ -54,6 +39,6 @@ describe("App", () => {
 
     expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start show/i })).toBeInTheDocument();
-    expect(screen.getByLabelText("Show title")).toHaveValue("Sheesha Ghar");
+    expect(screen.getByLabelText("Show title")).toHaveValue("Sheesha Ghar - Who Takes the Blame");
   });
 });

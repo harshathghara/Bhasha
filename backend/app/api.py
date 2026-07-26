@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -6,11 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .event_bus import EventBus, perform_leak
-from .models import AgentStatus, GM_ID, RoundConfig, Show, ShowStatus
+from .models import (
+    AgentStatus, EventKind, GM_ID, RoundConfig, Show, ShowStatus, PRODUCER_ID,
+)
 from .presets import (
     DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, DEFAULT_SHOW_PROMPT, build_preset_agent,
 )
 from .supervisor import run_round
+
+
+def slugify_show_id(title: str) -> str:
+    """URL-safe id: letters/digits only, no '?' or punctuation that breaks routes."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower())
+    return slug.strip("-") or "show"
 
 
 class CreateShowRequest(BaseModel):
@@ -23,6 +32,15 @@ class CreateShowRequest(BaseModel):
     agent_preset_ids: list
 
 
+class InjectEventRequest(BaseModel):
+    text: str
+
+
+class StartRoundRequest(BaseModel):
+    opening_brief: Optional[str] = None
+
+
+
 def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
     app = FastAPI()
     app.add_middleware(
@@ -31,12 +49,6 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    def _get_show_or_404(show_id: str):
-        try:
-            return store.get(show_id)
-        except KeyError as exc:
-            raise HTTPException(404, str(exc)) from exc
 
     config = config or RoundConfig()
     buses = {}
@@ -49,6 +61,16 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
             bus.add_listener(lambda event: _fan_out(show.id, event))
             buses[show.id] = bus
         return buses[show.id]
+
+    def require_show(show_id: str):
+        try:
+            return store.get(show_id)
+        except KeyError:
+            raise HTTPException(
+                404,
+                f"No show with id {show_id}. Create a new show "
+                "(server restarts clear in-memory shows).",
+            )
 
     def _fan_out(show_id, event):
         payload = event.to_dict()
@@ -71,7 +93,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(400, str(exc)) from exc
         show = Show(
-            id=req.title.lower().replace(" ", "-"),
+            id=slugify_show_id(req.title),
             title=req.title,
             show_prompt=req.show_prompt,
             gm_prompt=req.gm_prompt,
@@ -94,11 +116,11 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.get("/shows/{show_id}")
     def get_show(show_id: str):
-        return _get_show_or_404(show_id).to_dict()
+        return require_show(show_id).to_dict()
 
     @app.post("/shows/{show_id}/rounds")
-    async def start_round(show_id: str):
-        show = _get_show_or_404(show_id)
+    async def start_round(show_id: str, req: StartRoundRequest = StartRoundRequest()):
+        show = require_show(show_id)
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
             raise HTTPException(409, "Show has reached its round limit")
@@ -106,15 +128,20 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
         stop_event = asyncio.Event()
         stop_events[show_id] = stop_event
         try:
-            narrative = await run_round(
-                show, bus_for(show), llm_client, config, store, stop_event
+            recap, narrative = await run_round(
+                show, bus_for(show), llm_client, config, store, stop_event,
+                opening_brief=req.opening_brief,
             )
         finally:
             stop_events.pop(show_id, None)
 
         if show.max_rounds is not None and show.current_round >= show.max_rounds:
             show.status = ShowStatus.ENDED
-        return {"round": show.current_round, "narrative": narrative}
+        return {
+            "round": show.current_round,
+            "recap": recap,
+            "narrative": narrative,
+        }
 
     @app.post("/shows/{show_id}/stop")
     def stop_round(show_id: str):
@@ -126,7 +153,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.post("/shows/{show_id}/end")
     def end_show(show_id: str):
-        show = _get_show_or_404(show_id)
+        show = require_show(show_id)
         show.status = ShowStatus.ENDED
         stop_event = stop_events.get(show_id)
         if stop_event is not None:
@@ -135,17 +162,30 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.post("/shows/{show_id}/agents/{agent_id}/kill")
     def kill_agent(show_id: str, agent_id: str):
-        show = _get_show_or_404(show_id)
         try:
-            agent = show.get_agent(agent_id)
-        except KeyError as exc:
-            raise HTTPException(404, str(exc)) from exc
+            agent = require_show(show_id).get_agent(agent_id)
+        except KeyError:
+            raise HTTPException(404, f"No agent with id {agent_id}")
         agent.status = AgentStatus.ELIMINATED
         return agent.to_dict()
 
+    @app.post("/shows/{show_id}/events")
+    def inject_event(show_id: str, req: InjectEventRequest):
+        """Publish a public producer clue into the live event log."""
+        text = (req.text or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        show = require_show(show_id)
+        event = bus_for(show).publish(
+            PRODUCER_ID,
+            text,
+            kind=EventKind.PRODUCER_NOTE,
+        )
+        return event.to_dict()
+
     @app.post("/shows/{show_id}/events/{seq}/release")
     def release_event(show_id: str, seq: int):
-        show = _get_show_or_404(show_id)
+        show = require_show(show_id)
         for event in show.events:
             if event.seq == seq:
                 event.released = True
@@ -154,7 +194,7 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
 
     @app.post("/shows/{show_id}/events/{seq}/leak")
     def leak_event(show_id: str, seq: int):
-        show = _get_show_or_404(show_id)
+        show = require_show(show_id)
         bus = bus_for(show)
         for event in show.events:
             if event.seq == seq:

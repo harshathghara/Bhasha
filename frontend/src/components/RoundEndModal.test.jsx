@@ -74,7 +74,7 @@ describe("RoundEndModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /story so far/i }));
     fireEvent.click(screen.getByRole("button", { name: /end game/i }));
 
-    expect(onStartNext).toHaveBeenCalledTimes(1);
+    expect(onStartNext).toHaveBeenCalledWith("");
     expect(onToggleStory).toHaveBeenCalledTimes(1);
     expect(onEndGame).toHaveBeenCalledTimes(1);
   });
@@ -97,5 +97,47 @@ describe("RoundEndModal", () => {
 
     expect(screen.queryByRole("button", { name: /end game/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /show over/i })).toBeDisabled();
+  });
+
+  it("passes optional producer note to onStartNext", () => {
+    const onStartNext = vi.fn();
+    render(
+      <RoundEndModal
+        round={1}
+        recap="Recap."
+        narratives={{ 1: "Recap." }}
+        storyOpen={false}
+        showOver={false}
+        starting={false}
+        onStartNext={onStartNext}
+        onToggleStory={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("producer-note-input"), {
+      target: { value: "  Soft hint: trust nobody.  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start next round/i }));
+
+    expect(onStartNext).toHaveBeenCalledWith("Soft hint: trust nobody.");
+  });
+
+  it("starts next round with empty note when field left blank", () => {
+    const onStartNext = vi.fn();
+    render(
+      <RoundEndModal
+        round={1}
+        recap="Recap."
+        narratives={{ 1: "Recap." }}
+        storyOpen={false}
+        showOver={false}
+        starting={false}
+        onStartNext={onStartNext}
+        onToggleStory={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /start next round/i }));
+    expect(onStartNext).toHaveBeenCalledWith("");
   });
 });

@@ -5,6 +5,7 @@ function label(event) {
   if (event.kind === "confession") return "[confession, viewers only]";
   if (event.kind === "gm_ruling") return "[game master ruling]";
   if (event.kind === "gm_announcement") return "[game master]";
+  if (event.kind === "producer_note") return "[producer clue]";
   if (event.visibility === "private" && !event.released) return "[private, viewers only]";
   return "";
 }

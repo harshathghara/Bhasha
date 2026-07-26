@@ -5,12 +5,14 @@ import {
 } from "../presets";
 
 export default function ShowSetup({ onCreated }) {
-  const [title, setTitle] = useState("Sheesha Ghar");
+  const [title, setTitle] = useState("Sheesha Ghar - Who Takes the Blame");
   const [showPrompt, setShowPrompt] = useState(DEFAULT_SHOW_PROMPT);
   const [gmPrompt, setGmPrompt] = useState(DEFAULT_GM_PROMPT);
   const [rulesText, setRulesText] = useState(DEFAULT_RULES_TEXT);
   const [maxRounds, setMaxRounds] = useState("");
-  const [selectedIds, setSelectedIds] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(
+    () => PRESET_AGENTS.map((agent) => agent.id)
+  );
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -79,7 +81,7 @@ export default function ShowSetup({ onCreated }) {
       />
 
       <fieldset>
-        <legend>Pick exactly five housemates</legend>
+        <legend>The five under suspicion (uncheck to exclude — need exactly five)</legend>
         {PRESET_AGENTS.map((agent) => (
           <label key={agent.id} htmlFor={`agent-${agent.id}`}>
             <input

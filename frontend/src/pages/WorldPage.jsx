@@ -53,7 +53,7 @@ export default function WorldPage({ show, onEndGame = () => {} }) {
   // Wait for in-world bubbles / pending dialogue to finish before showing the modal.
   const modalOpen = endedRound != null && !roundActive && !dialogueBusy;
 
-  async function runRound() {
+  async function runRound(openingBrief = "") {
     const previousEnded = endedRound;
     setStarting(true);
     setStartError(null);
@@ -61,13 +61,18 @@ export default function WorldPage({ show, onEndGame = () => {} }) {
     setRoundActive(true);
     setEndedRound(null);
     try {
-      const result = await startRound(show.id);
+      const trimmed = typeof openingBrief === "string" ? openingBrief.trim() : "";
+      const result = await startRound(
+        show.id,
+        trimmed ? { opening_brief: trimmed } : {},
+      );
       setNarratives((prev) => ({
         ...prev,
         [result.round]: result.narrative,
       }));
       setEndedRound({
         round: result.round,
+        recap: result.recap || result.narrative,
         narrative: result.narrative,
       });
       if (show.max_rounds != null && result.round >= show.max_rounds) {
@@ -82,7 +87,11 @@ export default function WorldPage({ show, onEndGame = () => {} }) {
           const rounds = Object.keys(narratives).map(Number);
           if (rounds.length === 0) return null;
           const last = Math.max(...rounds);
-          return { round: last, narrative: narratives[last] };
+          return {
+            round: last,
+            recap: narratives[last],
+            narrative: narratives[last],
+          };
         });
       } else {
         setStartError(error.message || "Failed to start round");
@@ -125,7 +134,7 @@ export default function WorldPage({ show, onEndGame = () => {} }) {
     <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
       {!roundActive && !modalOpen && (
         <button
-          onClick={runRound}
+          onClick={() => runRound()}
           disabled={starting || showOver}
           style={{ ...startRoundButtonStyle, opacity: starting || showOver ? 0.6 : 1 }}
         >
@@ -159,7 +168,7 @@ export default function WorldPage({ show, onEndGame = () => {} }) {
       {modalOpen && (
         <RoundEndModal
           round={endedRound.round}
-          recap={endedRound.narrative}
+          recap={endedRound.recap}
           narratives={narratives}
           storyOpen={storyOpen}
           showOver={showOver}
