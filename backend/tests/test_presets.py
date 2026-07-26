@@ -38,6 +38,13 @@ def test_preset_pool_has_five_unique_murder_cast_personalities():
         assert "betrayal loop" in prompt
 
 
+def test_househelp_calls_out_leaks_by_name():
+    preset = next(p for p in PRESET_AGENT_PERSONALITIES if p["id"] == "househelp")
+    prompt = preset["personality_prompt"].lower()
+    assert "public leak" in prompt
+    assert "name" in prompt
+
+
 def test_build_preset_agent_returns_active_agent():
     agent = build_preset_agent("creditor")
     assert isinstance(agent, Agent)
