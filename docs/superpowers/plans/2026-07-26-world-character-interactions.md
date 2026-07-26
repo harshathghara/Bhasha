@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Connect the World UI to the real Sheesha Ghar backend — the 5 wandering characters become the show's actual contestants, and public speech, private messages, and confessions play out visually: characters walk toward each other, face each other, and show chat bubbles; GM rulings/announcements show as a dismissing banner.
+**Goal:** Connect the World UI to the real Bhram backend — the 5 wandering characters become the show's actual contestants, and public speech, private messages, and confessions play out visually: characters walk toward each other, face each other, and show chat bubbles; GM rulings/announcements show as a dismissing banner.
 
 **Architecture:** A per-character state machine (`mode`: `wander` → `walking-to-interact` → `interacting` → `wander`) extends the existing `WorldEngine.update()` loop, driven by a per-character FIFO `queue` of interaction commands built from incoming backend events. A small BFS pathfinder walks characters to a tile adjacent to their conversation partner; a pure event-mapping function translates raw backend events into commands. Bubbles and the GM banner are HTML/CSS overlays (not canvas-drawn), fed by a throttled `onFrame` snapshot callback on the engine, positioned as percentages over the canvas so they track it regardless of CSS scaling.
 
@@ -953,7 +953,7 @@ vi.mock("../components/WorldView", () => ({
 }));
 
 const show = {
-  id: "sheesha-ghar",
+  id: "bhram",
   contestants: [
     { id: "strategist", name: "The Strategist" },
     { id: "diplomat", name: "The Diplomat" },
@@ -981,7 +981,7 @@ describe("WorldPage", () => {
   it("renders WorldView with the show's id and real contestants", () => {
     render(<WorldPage show={show} />);
     const props = WorldView.mock.calls[0][0];
-    expect(props.showId).toBe("sheesha-ghar");
+    expect(props.showId).toBe("bhram");
     expect(props.characters.map((c) => c.id)).toEqual([
       "strategist", "diplomat", "loyalist", "operator", "wildcard",
     ]);
@@ -993,7 +993,7 @@ describe("WorldPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /start round/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram"));
   });
 });
 ```
@@ -1402,7 +1402,7 @@ vi.mock("./pages/WorldPage", () => ({
 
 describe("App", () => {
   it("shows ShowSetup first, then WorldPage once a show is created", async () => {
-    vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar", contestants: [] });
+    vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram", contestants: [] });
     render(<App />);
 
     expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
@@ -1414,7 +1414,7 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByTestId("world-page-stub")).toBeInTheDocument());
     const props = WorldPage.mock.calls[WorldPage.mock.calls.length - 1][0];
-    expect(props.show.id).toBe("sheesha-ghar");
+    expect(props.show.id).toBe("bhram");
   });
 });
 ```

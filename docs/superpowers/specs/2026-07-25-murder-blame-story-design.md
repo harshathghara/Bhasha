@@ -1,8 +1,8 @@
-# Sheesha Ghar — Murder Blame Story Design
+# Bhram — Murder Blame Story Design
 
 Branch: `story-optimization`  
 Status: approved for planning  
-Related harness: `2026-07-25-sheesha-ghar-design.md`
+Related harness: `2026-07-25-bhram-design.md`
 
 ## 1. Goal
 
@@ -12,7 +12,7 @@ This is a **content / defaults** change. It must not break harness standards: pr
 
 ## 2. Story premise
 
-**Working title:** Sheesha Ghar — Who Takes the Blame?
+**Working title:** Bhram — Who Takes the Blame?
 
 Five people connected to the dead man are in the house. He was found dead here. Police have not taken over. **Exactly one of them is the killer.** Nobody knows who — including via character prompts. There is almost no hard evidence. The game is survival: speak publicly, message privately, confess to viewers, and push blame onto someone else.
 

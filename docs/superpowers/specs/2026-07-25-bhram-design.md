@@ -1,4 +1,4 @@
-# Sheesha Ghar — AI Reality Show: Design Spec
+# Bhram — AI Reality Show: Design Spec
 
 Hackathon target: 4-person team, 1.5 days. Goal is a working end-to-end vertical
 slice, not the full feature list from the original brief. Everything under

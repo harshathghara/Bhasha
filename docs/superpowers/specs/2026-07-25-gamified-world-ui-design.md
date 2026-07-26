@@ -1,8 +1,8 @@
 # Gamified World UI — Design Spec
 
-**Goal:** Build a small, top-down pixel-art "world" view in the existing Sheesha Ghar frontend — a single room (the house's central hall) where character sprites wander around on their own, in the visual style of classic Pokemon overworld screens. This first phase builds the world and its movement mechanics with placeholder characters only. Wiring it to the show's real 5 agents (live positions, names, personalities reflected visually) is explicitly out of scope and deferred to a follow-up spec.
+**Goal:** Build a small, top-down pixel-art "world" view in the existing Bhram frontend — a single room (the house's central hall) where character sprites wander around on their own, in the visual style of classic Pokemon overworld screens. This first phase builds the world and its movement mechanics with placeholder characters only. Wiring it to the show's real 5 agents (live positions, names, personalities reflected visually) is explicitly out of scope and deferred to a follow-up spec.
 
-**Context:** The backend and REST/WebSocket API for Sheesha Ghar (5 LLM agents in a reality-show simulator) already exist, along with a React/Vite frontend (`ShowSetup`, `LiveRoom`, `EventFeed` components, an `api/client.js`). There is currently no app shell (`App.jsx`) or routing in the frontend — that was out of scope for the original harness plan. This spec's world view is additive: it does not touch `ShowSetup`/`LiveRoom`/`EventFeed`, but does introduce the first minimal app shell needed to reach a new page.
+**Context:** The backend and REST/WebSocket API for Bhram (5 LLM agents in a reality-show simulator) already exist, along with a React/Vite frontend (`ShowSetup`, `LiveRoom`, `EventFeed` components, an `api/client.js`). There is currently no app shell (`App.jsx`) or routing in the frontend — that was out of scope for the original harness plan. This spec's world view is additive: it does not touch `ShowSetup`/`LiveRoom`/`EventFeed`, but does introduce the first minimal app shell needed to reach a new page.
 
 ## Non-goals (this phase)
 

@@ -14,35 +14,35 @@ function ok(data) {
 
 describe("api client", () => {
   it("createShow posts to /shows", async () => {
-    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar" }));
-    const result = await createShow({ title: "Sheesha Ghar", agent_preset_ids: [] });
+    global.fetch.mockReturnValue(ok({ id: "bhram" }));
+    const result = await createShow({ title: "Bhram", agent_preset_ids: [] });
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("/shows"),
       expect.objectContaining({ method: "POST" })
     );
-    expect(result).toEqual({ id: "sheesha-ghar" });
+    expect(result).toEqual({ id: "bhram" });
   });
 
   it("getShow fetches the show", async () => {
-    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar" }));
-    await getShow("sheesha-ghar");
+    global.fetch.mockReturnValue(ok({ id: "bhram" }));
+    await getShow("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar")
+      expect.stringContaining("/shows/bhram")
     );
   });
 
   it("startRound, stopRound, and endShow hit their routes", async () => {
     global.fetch.mockReturnValue(ok({ round: 1, narrative: "x" }));
-    await startRound("sheesha-ghar");
+    await startRound("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/rounds"),
+      expect.stringContaining("/shows/bhram/rounds"),
       expect.objectContaining({ method: "POST" })
     );
 
     global.fetch.mockReturnValue(ok({ round: 2, narrative: "y" }));
-    await startRound("sheesha-ghar", { opening_brief: "Footprints by the door." });
+    await startRound("bhram", { opening_brief: "Footprints by the door." });
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/rounds"),
+      expect.stringContaining("/shows/bhram/rounds"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ opening_brief: "Footprints by the door." }),
@@ -50,34 +50,34 @@ describe("api client", () => {
     );
 
     global.fetch.mockReturnValue(ok({ stopped: true }));
-    await stopRound("sheesha-ghar");
+    await stopRound("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/stop"),
+      expect.stringContaining("/shows/bhram/stop"),
       expect.objectContaining({ method: "POST" })
     );
 
-    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar", status: "ended" }));
-    await endShow("sheesha-ghar");
+    global.fetch.mockReturnValue(ok({ id: "bhram", status: "ended" }));
+    await endShow("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/end"),
+      expect.stringContaining("/shows/bhram/end"),
       expect.objectContaining({ method: "POST" })
     );
   });
 
   it("killAgent hits the kill route", async () => {
     global.fetch.mockReturnValue(ok({ status: "eliminated" }));
-    await killAgent("sheesha-ghar", "vikram");
+    await killAgent("bhram", "vikram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/agents/vikram/kill"),
+      expect.stringContaining("/shows/bhram/agents/vikram/kill"),
       expect.objectContaining({ method: "POST" })
     );
   });
 
   it("releaseEvent posts to the event release route", async () => {
     global.fetch.mockReturnValue(ok({ seq: 3, released: true }));
-    const result = await releaseEvent("sheesha-ghar", 3);
+    const result = await releaseEvent("bhram", 3);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/events/3/release"),
+      expect.stringContaining("/shows/bhram/events/3/release"),
       expect.objectContaining({ method: "POST" })
     );
     expect(result.released).toBe(true);
@@ -85,9 +85,9 @@ describe("api client", () => {
 
   it("leakEvent posts to the event leak route", async () => {
     global.fetch.mockReturnValue(ok({ seq: 3, released: true }));
-    const result = await leakEvent("sheesha-ghar", 3);
+    const result = await leakEvent("bhram", 3);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/events/3/leak"),
+      expect.stringContaining("/shows/bhram/events/3/leak"),
       expect.objectContaining({ method: "POST" })
     );
     expect(result.released).toBe(true);
@@ -95,9 +95,9 @@ describe("api client", () => {
 
   it("injectEvent posts a producer note to the events route", async () => {
     global.fetch.mockReturnValue(ok({ seq: 4, kind: "producer_note" }));
-    const result = await injectEvent("sheesha-ghar", "A bloody handkerchief.");
+    const result = await injectEvent("bhram", "A bloody handkerchief.");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/events"),
+      expect.stringContaining("/shows/bhram/events"),
       expect.objectContaining({ method: "POST" })
     );
     expect(result.kind).toBe("producer_note");

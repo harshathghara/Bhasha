@@ -14,7 +14,7 @@ vi.mock("../components/WorldView", () => ({
 }));
 
 const show = {
-  id: "sheesha-ghar",
+  id: "bhram",
   max_rounds: 3,
   status: "live",
   narratives: {},
@@ -50,7 +50,7 @@ describe("WorldPage", () => {
   it("renders WorldView with the show's id and real contestants", () => {
     render(<WorldPage show={show} />);
     const props = WorldView.mock.calls[0][0];
-    expect(props.showId).toBe("sheesha-ghar");
+    expect(props.showId).toBe("bhram");
     expect(props.characters.map((c) => c.id)).toEqual([
       "creditor", "wife", "lawyer", "brother", "househelp",
     ]);
@@ -172,7 +172,7 @@ describe("WorldPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /end game/i }));
 
-    await waitFor(() => expect(endSpy).toHaveBeenCalledWith("sheesha-ghar"));
+    await waitFor(() => expect(endSpy).toHaveBeenCalledWith("bhram"));
     expect(onEndGame).toHaveBeenCalledTimes(1);
   });
 });

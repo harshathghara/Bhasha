@@ -55,8 +55,10 @@ from .models import Agent, AgentStatus
 #      "yourself. You rarely commit to an alliance and say so openly."},
 # ]
 
+SHOW_TITLE = "Bhram"
+
 DEFAULT_SHOW_PROMPT = (
-    "Sheesha Ghar: Who Takes the Blame?\n"
+    "Bhram: Who Takes the Blame?\n"
     "Ramesh Malhotra, a middle-class man, has been found dead in this house. "
     "Police have not taken over yet. Five people tied to him are locked in "
     "together: his wife Priya, his younger brother Karan, his lawyer friend "
@@ -79,7 +81,7 @@ DEFAULT_SHOW_PROMPT = (
 )
 
 DEFAULT_GM_PROMPT = (
-    "You are the Game Master of Sheesha Ghar's blame ritual. You are fair but "
+    "You are the Game Master of Bhram's blame ritual. You are fair but "
     "firm. You do NOT know who killed Ramesh and you must never invent a "
     "secret correct answer.\n"
     "Enforce the house rules. If someone tries to pin the murder only on "

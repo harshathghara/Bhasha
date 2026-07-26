@@ -350,9 +350,9 @@ git commit -m "feat: accept optional producer_note on start round API"
 ```javascript
 it("startRound sends producer_note when provided", async () => {
   global.fetch.mockReturnValue(ok({ round: 1, narrative: "x" }));
-  await startRound("sheesha-ghar", { producer_note: "Focus on the letter." });
+  await startRound("bhram", { producer_note: "Focus on the letter." });
   expect(global.fetch).toHaveBeenCalledWith(
-    expect.stringContaining("/shows/sheesha-ghar/rounds"),
+    expect.stringContaining("/shows/bhram/rounds"),
     expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ producer_note: "Focus on the letter." }),

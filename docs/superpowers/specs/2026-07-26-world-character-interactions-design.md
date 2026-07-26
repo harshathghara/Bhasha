@@ -1,6 +1,6 @@
 # World Character Interactions — Design Spec
 
-**Goal:** Connect the World UI (built in the gamified-world-ui plan) to the real Sheesha Ghar backend, so the 5 wandering characters are the show's actual contestants, and their public speech, private messages, and confessions play out visually — walking toward each other, facing each other, and showing chat bubbles — instead of just idle random wandering.
+**Goal:** Connect the World UI (built in the gamified-world-ui plan) to the real Bhram backend, so the 5 wandering characters are the show's actual contestants, and their public speech, private messages, and confessions play out visually — walking toward each other, facing each other, and showing chat bubbles — instead of just idle random wandering.
 
 **Context:** The World UI currently renders 5 hardcoded placeholder characters that wander a single room with no connection to any real show. The backend already streams every event over a WebSocket (`GET /ws/{show_id}`), unfiltered, as `{seq, round, sender_id, text, kind, visibility, recipients, released, timestamp}`. The frontend already has an `openEventSocket(showId, onEvent)` client (built in an earlier task, never wired to any component) and a `ShowSetup` component that creates a show via the API but whose result currently goes nowhere (`App.jsx` renders `WorldPage` directly with no real show).
 

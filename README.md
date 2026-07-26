@@ -1,4 +1,4 @@
-# Sheesha Ghar
+# Bhram
 
 An AI reality-show simulation. Five LLM-driven characters are locked in a
 house with one dead man and one killer among them, and they must talk,
@@ -8,7 +8,7 @@ narrator writes each round's recap, and a human "producer" (you) can watch
 the whole thing live and even leak a private secret to the whole house
 mid-game to see how the cast reacts.
 
-The default show, "Sheesha Ghar: Who Takes the Blame?", is a murder-blame
+The default show, "Bhram: Who Takes the Blame?", is a murder-blame
 game: Ramesh Malhotra is dead, and his wife, brother, lawyer, creditor, and
 househelp must figure out — or successfully pin — who takes the fall. The
 show premise, house rules, and cast personalities are all configurable per

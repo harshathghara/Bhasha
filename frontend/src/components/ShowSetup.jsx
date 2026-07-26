@@ -2,10 +2,10 @@ import { useState } from "react";
 import { createShow } from "../api/client";
 import {
   PRESET_AGENTS, DEFAULT_SHOW_PROMPT, DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT,
+  SHOW_TITLE,
 } from "../presets";
 
 export default function ShowSetup({ onCreated }) {
-  const [title, setTitle] = useState("Sheesha Ghar - Who Takes the Blame");
   const [showPrompt, setShowPrompt] = useState(DEFAULT_SHOW_PROMPT);
   const [gmPrompt, setGmPrompt] = useState(DEFAULT_GM_PROMPT);
   const [rulesText, setRulesText] = useState(DEFAULT_RULES_TEXT);
@@ -30,7 +30,7 @@ export default function ShowSetup({ onCreated }) {
     setSubmitting(true);
     try {
       const show = await createShow({
-        title,
+        title: SHOW_TITLE,
         show_prompt: showPrompt,
         gm_prompt: gmPrompt,
         rules_text: rulesText,
@@ -47,8 +47,10 @@ export default function ShowSetup({ onCreated }) {
 
   return (
     <form onSubmit={handleSubmit}>
-      <label htmlFor="show-title">Show title</label>
-      <input id="show-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <p>
+        <span>Show title</span>
+        <strong data-testid="show-title">{SHOW_TITLE}</strong>
+      </p>
 
       <label htmlFor="max-rounds">Number of rounds (blank for unlimited)</label>
       <input

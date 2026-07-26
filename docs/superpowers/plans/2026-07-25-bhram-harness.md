@@ -1,8 +1,8 @@
-# Sheesha Ghar Harness Implementation Plan
+# Bhram Harness Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the harness for Sheesha Ghar — an AI reality show where 5 LLM-driven agents run as concurrent tasks messaging each other publicly and privately through an event bus, moderated live by a Game Master agent, with all prompts swappable behind shipped defaults.
+**Goal:** Build the harness for Bhram — an AI reality show where 5 LLM-driven agents run as concurrent tasks messaging each other publicly and privately through an event bus, moderated live by a Game Master agent, with all prompts swappable behind shipped defaults.
 
 **Architecture:** Single-process FastAPI backend, state in memory, snapshotted to JSON per round. Each agent is an `asyncio.Task` with an inbox queue; an event bus fans public events to everyone and private events to recipients. A supervisor starts a round, and an end watcher stops it on budget exhaustion, quiescence, timeout, GM decision, or producer stop. A WebSocket streams every event to a React frontend live.
 
@@ -2234,7 +2234,7 @@ def make_client(tmp_path):
 
 
 def create_show(client, **overrides):
-    body = {"title": "Sheesha Ghar", "agent_preset_ids": FIVE}
+    body = {"title": "Bhram", "agent_preset_ids": FIVE}
     body.update(overrides)
     return client.post("/shows", json=body)
 
@@ -2507,7 +2507,7 @@ Create `frontend/package.json`:
 
 ```json
 {
-  "name": "sheesha-ghar-frontend",
+  "name": "bhram-frontend",
   "private": true,
   "type": "module",
   "scripts": {
@@ -2566,53 +2566,53 @@ function ok(data) {
 
 describe("api client", () => {
   it("createShow posts to /shows", async () => {
-    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar" }));
-    const result = await createShow({ title: "Sheesha Ghar", agent_preset_ids: [] });
+    global.fetch.mockReturnValue(ok({ id: "bhram" }));
+    const result = await createShow({ title: "Bhram", agent_preset_ids: [] });
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("/shows"),
       expect.objectContaining({ method: "POST" })
     );
-    expect(result).toEqual({ id: "sheesha-ghar" });
+    expect(result).toEqual({ id: "bhram" });
   });
 
   it("getShow fetches the show", async () => {
-    global.fetch.mockReturnValue(ok({ id: "sheesha-ghar" }));
-    await getShow("sheesha-ghar");
+    global.fetch.mockReturnValue(ok({ id: "bhram" }));
+    await getShow("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar")
+      expect.stringContaining("/shows/bhram")
     );
   });
 
   it("startRound and stopRound hit their routes", async () => {
     global.fetch.mockReturnValue(ok({ round: 1, narrative: "x" }));
-    await startRound("sheesha-ghar");
+    await startRound("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/rounds"),
+      expect.stringContaining("/shows/bhram/rounds"),
       expect.objectContaining({ method: "POST" })
     );
 
     global.fetch.mockReturnValue(ok({ stopped: true }));
-    await stopRound("sheesha-ghar");
+    await stopRound("bhram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/stop"),
+      expect.stringContaining("/shows/bhram/stop"),
       expect.objectContaining({ method: "POST" })
     );
   });
 
   it("killAgent hits the kill route", async () => {
     global.fetch.mockReturnValue(ok({ status: "eliminated" }));
-    await killAgent("sheesha-ghar", "vikram");
+    await killAgent("bhram", "vikram");
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/agents/vikram/kill"),
+      expect.stringContaining("/shows/bhram/agents/vikram/kill"),
       expect.objectContaining({ method: "POST" })
     );
   });
 
   it("releaseEvent posts to the event release route", async () => {
     global.fetch.mockReturnValue(ok({ seq: 3, released: true }));
-    const result = await releaseEvent("sheesha-ghar", 3);
+    const result = await releaseEvent("bhram", 3);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/events/3/release"),
+      expect.stringContaining("/shows/bhram/events/3/release"),
       expect.objectContaining({ method: "POST" })
     );
     expect(result.released).toBe(true);
@@ -2783,12 +2783,12 @@ describe("ShowSetup", () => {
   });
 
   it("submits prompts, rounds, and agents, then reports the created show", async () => {
-    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram" });
     const onCreated = vi.fn();
 
     render(<ShowSetup onCreated={onCreated} />);
     fireEvent.change(screen.getByLabelText(/show title/i), {
-      target: { value: "Sheesha Ghar" },
+      target: { value: "Bhram" },
     });
     fireEvent.change(screen.getByLabelText(/number of rounds/i), {
       target: { value: "6" },
@@ -2796,10 +2796,10 @@ describe("ShowSetup", () => {
     selectFive();
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "sheesha-ghar" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "bhram" }));
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Sheesha Ghar",
+        title: "Bhram",
         max_rounds: 6,
         agent_preset_ids: [
           "strategist", "diplomat", "loyalist", "operator", "wildcard",
@@ -2809,7 +2809,7 @@ describe("ShowSetup", () => {
   });
 
   it("sends null rounds when the field is left blank", async () => {
-    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram" });
 
     render(<ShowSetup onCreated={() => {}} />);
     selectFive();
@@ -2836,7 +2836,7 @@ import {
 } from "../presets";
 
 export default function ShowSetup({ onCreated }) {
-  const [title, setTitle] = useState("Sheesha Ghar");
+  const [title, setTitle] = useState("Bhram");
   const [showPrompt, setShowPrompt] = useState(DEFAULT_SHOW_PROMPT);
   const [gmPrompt, setGmPrompt] = useState(DEFAULT_GM_PROMPT);
   const [rulesText, setRulesText] = useState(DEFAULT_RULES_TEXT);
@@ -3017,8 +3017,8 @@ import LiveRoom from "./LiveRoom";
 import * as api from "../api/client";
 
 const show = {
-  id: "sheesha-ghar",
-  title: "Sheesha Ghar",
+  id: "bhram",
+  title: "Bhram",
   current_round: 0,
   contestants: [
     { id: "vikram", name: "Vikram", status: "active" },
@@ -3045,7 +3045,7 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
     fireEvent.click(screen.getByRole("button", { name: /start round/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram"));
     expect(onShowUpdated).toHaveBeenCalled();
   });
 
@@ -3055,7 +3055,7 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /stop round/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram"));
   });
 
   it("kill calls killAgent for that contestant", async () => {
@@ -3065,7 +3065,7 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /kill vikram/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar", "vikram"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram", "vikram"));
   });
 });
 ```

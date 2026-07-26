@@ -11,7 +11,8 @@ from .models import (
     AgentStatus, EventKind, GM_ID, RoundConfig, Show, ShowStatus, PRODUCER_ID,
 )
 from .presets import (
-    DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, DEFAULT_SHOW_PROMPT, build_preset_agent,
+    DEFAULT_GM_PROMPT, DEFAULT_RULES_TEXT, DEFAULT_SHOW_PROMPT, SHOW_TITLE,
+    build_preset_agent,
 )
 from .supervisor import run_round
 
@@ -92,9 +93,10 @@ def create_app(store, llm_client, config: RoundConfig = None) -> FastAPI:
             contestants = [build_preset_agent(pid) for pid in req.agent_preset_ids]
         except KeyError as exc:
             raise HTTPException(400, str(exc)) from exc
+        # Product brand name is fixed; client-supplied titles are ignored.
         show = Show(
-            id=slugify_show_id(req.title),
-            title=req.title,
+            id=slugify_show_id(SHOW_TITLE),
+            title=SHOW_TITLE,
             show_prompt=req.show_prompt,
             gm_prompt=req.gm_prompt,
             rules_text=req.rules_text,

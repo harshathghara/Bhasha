@@ -29,7 +29,7 @@ def make_client(tmp_path):
 
 
 def create_show(client, **overrides):
-    body = {"title": "Sheesha Ghar", "agent_preset_ids": FIVE}
+    body = {"title": "Bhram", "agent_preset_ids": FIVE}
     body.update(overrides)
     return client.post("/shows", json=body)
 
@@ -47,12 +47,13 @@ def test_create_show_returns_running_show_with_five_contestants(tmp_path):
     assert data["status"] == "running"
 
 
-def test_show_id_strips_punctuation_that_breaks_urls(tmp_path):
+def test_show_title_and_id_are_fixed_brand(tmp_path):
     client, _ = make_client(tmp_path)
     data = create_show(
-        client, title="Sheesha Ghar — Who Takes the Blame?"
+        client, title="Ignored Custom Title?"
     ).json()
-    assert data["id"] == "sheesha-ghar-who-takes-the-blame"
+    assert data["title"] == "Bhram"
+    assert data["id"] == "bhram"
     assert "?" not in data["id"]
 
 

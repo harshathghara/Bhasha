@@ -28,20 +28,22 @@ describe("ShowSetup", () => {
     expect(submit).not.toBeDisabled();
   });
 
-  it("submits murder defaults and the five cast ids", async () => {
-    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
+  it("shows the fixed Bhram title and submits murder defaults", async () => {
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram" });
     const onCreated = vi.fn();
 
     render(<ShowSetup onCreated={onCreated} />);
+    expect(screen.getByTestId("show-title")).toHaveTextContent("Bhram");
+    expect(screen.queryByLabelText(/show title/i)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/number of rounds/i), {
       target: { value: "6" },
     });
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "sheesha-ghar" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "bhram" }));
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Sheesha Ghar - Who Takes the Blame",
+        title: "Bhram",
         max_rounds: 6,
         agent_preset_ids: [
           "creditor", "wife", "lawyer", "brother", "househelp",
@@ -52,7 +54,7 @@ describe("ShowSetup", () => {
   });
 
   it("sends null rounds when the field is left blank", async () => {
-    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram" });
 
     render(<ShowSetup onCreated={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));

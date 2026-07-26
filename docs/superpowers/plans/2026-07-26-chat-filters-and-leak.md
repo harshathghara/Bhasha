@@ -765,9 +765,9 @@ import {
 ```js
   it("leakEvent posts to the event leak route", async () => {
     global.fetch.mockReturnValue(ok({ seq: 3, released: true }));
-    const result = await leakEvent("sheesha-ghar", 3);
+    const result = await leakEvent("bhram", 3);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/shows/sheesha-ghar/events/3/leak"),
+      expect.stringContaining("/shows/bhram/events/3/leak"),
       expect.objectContaining({ method: "POST" })
     );
     expect(result.released).toBe(true);

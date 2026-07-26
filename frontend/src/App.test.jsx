@@ -14,7 +14,7 @@ vi.mock("./pages/WorldPage", () => ({
 
 describe("App", () => {
   it("shows ShowSetup first, then WorldPage once a show is created", async () => {
-    vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar", contestants: [] });
+    vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram", contestants: [] });
     render(<App />);
 
     expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
@@ -24,11 +24,11 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByTestId("world-page-stub")).toBeInTheDocument());
     const props = WorldPage.mock.calls[WorldPage.mock.calls.length - 1][0];
-    expect(props.show.id).toBe("sheesha-ghar");
+    expect(props.show.id).toBe("bhram");
   });
 
   it("returns to a fresh show setup after the game ends", async () => {
-    vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar", contestants: [] });
+    vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram", contestants: [] });
     render(<App />);
 
     // Murder cast is pre-selected; do not toggle the checkboxes (that would deselect them).
@@ -39,6 +39,6 @@ describe("App", () => {
 
     expect(screen.queryByTestId("world-page-stub")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start show/i })).toBeInTheDocument();
-    expect(screen.getByLabelText("Show title")).toHaveValue("Sheesha Ghar - Who Takes the Blame");
+    expect(screen.getByTestId("show-title")).toHaveTextContent("Bhram");
   });
 });

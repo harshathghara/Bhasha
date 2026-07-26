@@ -16,6 +16,9 @@ def test_defaults_are_nonempty_strings():
 
 
 def test_defaults_describe_the_murder_blame_premise():
+    from app.presets import SHOW_TITLE
+    assert SHOW_TITLE == "Bhram"
+    assert "Bhram" in DEFAULT_SHOW_PROMPT
     assert "Ramesh Malhotra" in DEFAULT_SHOW_PROMPT
     assert "killer" in DEFAULT_SHOW_PROMPT.lower()
     assert "blame" in DEFAULT_GM_PROMPT.lower()

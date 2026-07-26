@@ -2,7 +2,7 @@
 
 Branch: `story-optimization`  
 Status: design notes (pacing deferred for implementation choice; inject recommendation below)  
-Related: `2026-07-25-sheesha-ghar-design.md` (harness), deferred “producer notes mid-round” in §11
+Related: `2026-07-25-bhram-design.md` (harness), deferred “producer notes mid-round” in §11
 
 ## 1. Goal
 

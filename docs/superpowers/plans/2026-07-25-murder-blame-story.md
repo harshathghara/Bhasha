@@ -164,7 +164,7 @@ from .models import Agent, AgentStatus
 # ]
 
 DEFAULT_SHOW_PROMPT = (
-    "Sheesha Ghar: Who Takes the Blame?\n"
+    "Bhram: Who Takes the Blame?\n"
     "Ramesh Malhotra, a middle-class man, has been found dead in this house. "
     "Police have not taken over yet. Five people tied to him are locked in "
     "together: his wife, his younger brother, his lawyer friend, a man he owed "
@@ -179,7 +179,7 @@ DEFAULT_SHOW_PROMPT = (
 )
 
 DEFAULT_GM_PROMPT = (
-    "You are the Game Master of Sheesha Ghar's blame ritual. You are fair but "
+    "You are the Game Master of Bhram's blame ritual. You are fair but "
     "firm. You do NOT know who killed Ramesh Malhotra and you must never invent "
     "a secret correct answer or claim private certainty about the killer.\n"
     "Enforce the house rules exactly as written. Interject when a rule is "
@@ -421,7 +421,7 @@ export const PRESET_AGENTS = [
 ];
 
 export const DEFAULT_SHOW_PROMPT =
-  "Sheesha Ghar: Who Takes the Blame?\n" +
+  "Bhram: Who Takes the Blame?\n" +
   "Ramesh Malhotra, a middle-class man, has been found dead in this house. " +
   "Police have not taken over yet. Five people tied to him are locked in " +
   "together: his wife, his younger brother, his lawyer friend, a man he owed " +
@@ -435,7 +435,7 @@ export const DEFAULT_SHOW_PROMPT =
   "may not be the real murderer.";
 
 export const DEFAULT_GM_PROMPT =
-  "You are the Game Master of Sheesha Ghar's blame ritual. You are fair but " +
+  "You are the Game Master of Bhram's blame ritual. You are fair but " +
   "firm. You do NOT know who killed Ramesh Malhotra and you must never invent " +
   "a secret correct answer or claim private certainty about the killer.\n" +
   "Enforce the house rules exactly as written. Interject when a rule is " +
@@ -464,7 +464,7 @@ Keep the full commented legacy block above the new exports (mirror Task 1).
 Change initial state and default title:
 
 ```javascript
-const [title, setTitle] = useState("Sheesha Ghar — Who Takes the Blame?");
+const [title, setTitle] = useState("Bhram — Who Takes the Blame?");
 // ...
 const [selectedIds, setSelectedIds] = useState(
   () => PRESET_AGENTS.map((agent) => agent.id)
@@ -513,7 +513,7 @@ describe("ShowSetup", () => {
   });
 
   it("submits murder defaults and the five cast ids", async () => {
-    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram" });
     const onCreated = vi.fn();
 
     render(<ShowSetup onCreated={onCreated} />);
@@ -522,10 +522,10 @@ describe("ShowSetup", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));
 
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "sheesha-ghar" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "bhram" }));
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Sheesha Ghar — Who Takes the Blame?",
+        title: "Bhram — Who Takes the Blame?",
         max_rounds: 6,
         agent_preset_ids: [
           "creditor", "wife", "lawyer", "brother", "househelp",
@@ -536,7 +536,7 @@ describe("ShowSetup", () => {
   });
 
   it("sends null rounds when the field is left blank", async () => {
-    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "sheesha-ghar" });
+    const spy = vi.spyOn(api, "createShow").mockResolvedValue({ id: "bhram" });
 
     render(<ShowSetup onCreated={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /start show/i }));

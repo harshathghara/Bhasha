@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a canvas-based, top-down pixel-art "world" view in the Sheesha Ghar frontend — a single room where 5 placeholder characters wander around on a grid, in the visual style of classic overworld screens, with a minimal app shell to reach it.
+**Goal:** Build a canvas-based, top-down pixel-art "world" view in the Bhram frontend — a single room where 5 placeholder characters wander around on a grid, in the visual style of classic overworld screens, with a minimal app shell to reach it.
 
 **Architecture:** A plain-JS `WorldEngine` class owns the animation loop (`requestAnimationFrame`), character movement state, and canvas drawing; a thin React component (`WorldView`) only mounts/unmounts the engine and never re-renders per frame. Movement logic (tile validity, random-adjacent-tile choice, occupancy) is pure and unit-tested independently of any rendering. Placeholder pixel-art assets are generated deterministically by a committed Python/Pillow script rather than sourced externally, eliminating network and license-verification risk during implementation.
 
@@ -1199,7 +1199,7 @@ Create `frontend/index.html`:
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Sheesha Ghar</title>
+    <title>Bhram</title>
   </head>
   <body>
     <div id="root"></div>
@@ -1214,7 +1214,7 @@ Run: `npm test -- App.test.jsx`
 Expected: 3 tests passing.
 
 Then run the full frontend suite to confirm no regressions: `npm test`
-Expected: all suites passing (Task 1-8's new tests plus every existing test from the earlier Sheesha Ghar frontend tasks).
+Expected: all suites passing (Task 1-8's new tests plus every existing test from the earlier Bhram frontend tasks).
 
 - [ ] **Step 5: Commit**
 

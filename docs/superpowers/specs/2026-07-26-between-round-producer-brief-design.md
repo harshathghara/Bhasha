@@ -2,7 +2,7 @@
 
 Branch: `story-optimization`  
 Status: implemented  
-Related: mid-round inject (`2026-07-26-producer-inject-and-pacing-design.md`), harness round lifecycle (`2026-07-25-sheesha-ghar-design.md` §5–6)
+Related: mid-round inject (`2026-07-26-producer-inject-and-pacing-design.md`), harness round lifecycle (`2026-07-25-bhram-design.md` §5–6)
 
 ## 1. Goal
 

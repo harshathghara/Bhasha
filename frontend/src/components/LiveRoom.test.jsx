@@ -4,8 +4,8 @@ import LiveRoom from "./LiveRoom";
 import * as api from "../api/client";
 
 const show = {
-  id: "sheesha-ghar",
-  title: "Sheesha Ghar",
+  id: "bhram",
+  title: "Bhram",
   current_round: 0,
   contestants: [
     { id: "vikram", name: "Vikram", status: "active" },
@@ -32,7 +32,7 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={onShowUpdated} />);
     fireEvent.click(screen.getByRole("button", { name: /start round/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar", {}));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram", {}));
     expect(onShowUpdated).toHaveBeenCalled();
   });
 
@@ -47,7 +47,7 @@ describe("LiveRoom", () => {
     fireEvent.click(screen.getByRole("button", { name: /start round/i }));
 
     await waitFor(() =>
-      expect(spy).toHaveBeenCalledWith("sheesha-ghar", {
+      expect(spy).toHaveBeenCalledWith("bhram", {
         opening_brief: "Footprints by the back door.",
       })
     );
@@ -61,7 +61,7 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /stop round/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram"));
   });
 
   it("kill calls killAgent for that contestant", async () => {
@@ -71,7 +71,7 @@ describe("LiveRoom", () => {
     render(<LiveRoom show={show} onShowUpdated={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /kill vikram/i }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sheesha-ghar", "vikram"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("bhram", "vikram"));
   });
 
   it("inject clue posts text and clears the field", async () => {
@@ -87,7 +87,7 @@ describe("LiveRoom", () => {
     fireEvent.click(screen.getByRole("button", { name: /inject clue/i }));
 
     await waitFor(() =>
-      expect(spy).toHaveBeenCalledWith("sheesha-ghar", "A bloody handkerchief.")
+      expect(spy).toHaveBeenCalledWith("bhram", "A bloody handkerchief.")
     );
     expect(onShowUpdated).toHaveBeenCalled();
     expect(screen.getByLabelText(/inject public clue/i)).toHaveValue("");

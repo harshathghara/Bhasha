@@ -37,8 +37,10 @@ export const PRESET_AGENTS = [
   { id: "househelp", name: "Meena Devi — The Househelp" },
 ];
 
+export const SHOW_TITLE = "Bhram";
+
 export const DEFAULT_SHOW_PROMPT =
-  "Sheesha Ghar: Who Takes the Blame?\n" +
+  "Bhram: Who Takes the Blame?\n" +
   "Ramesh Malhotra, a middle-class man, has been found dead in this house. " +
   "Police have not taken over yet. Five people tied to him are locked in " +
   "together: his wife Priya, his younger brother Karan, his lawyer friend " +
@@ -60,7 +62,7 @@ export const DEFAULT_SHOW_PROMPT =
   "may not be the real murderer.";
 
 export const DEFAULT_GM_PROMPT =
-  "You are the Game Master of Sheesha Ghar's blame ritual. You are fair but " +
+  "You are the Game Master of Bhram's blame ritual. You are fair but " +
   "firm. You do NOT know who killed Ramesh and you must never invent a " +
   "secret correct answer.\n" +
   "Enforce the house rules. If someone tries to pin the murder only on " +
